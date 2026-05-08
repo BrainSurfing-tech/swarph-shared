@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "swarph-shared"
-version = "0.1.0"
-description = "Shared substrate primitives for swarph-mesh ecosystem (caller convention, subprocess env scrubbing, JSON-mode harness)."
+version = "0.2.0"
+description = "Shared substrate primitives for swarph-mesh ecosystem (caller convention, subprocess env scrubbing, JSON-mode harness, peer-name registry)."
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"

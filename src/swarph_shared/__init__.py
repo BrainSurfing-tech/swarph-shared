@@ -1,6 +1,6 @@
 """swarph-shared — shared substrate primitives for the swarph-mesh ecosystem.
 
-Three small, single-purpose modules consumed by every swarph-mesh component
+Four small, single-purpose modules consumed by every swarph-mesh component
 (omega-boss, opus_subscription, future swarph-mesh package) so the substrate
 patterns stay consistent across producers:
 
@@ -13,6 +13,11 @@ patterns stay consistent across producers:
   - json_mode           — JSON parsing harness with prose-extraction fallback
                           and retry-callback contract for vendor LLMs that
                           drift from strict-JSON output
+  - peer_registry       — canonical peer-name resolution against the
+                          mesh-gateway /peers endpoint; static KNOWN_ALIASES
+                          drift table for observed contagion-aliases. Closes
+                          the framing-contagion class observed in lab-claude
+                          (Vector A) and drop (Vector B) incidents.
 
 The package is **MIT-licensed** and **pure stdlib** — zero runtime deps. Same
 pattern as phawkes / fisherrao / tailcor / diebold-yilmaz / hodgex
@@ -37,8 +42,17 @@ from swarph_shared.json_mode import (
     parse_json_with_retry,
     build_retry_feedback_turn,
 )
+from swarph_shared.peer_registry import (
+    KNOWN_ALIASES,
+    NAMING_CONVENTION_REGEX,
+    GatewayUnreachableError,
+    NotInRegistry,
+    canonical_names,
+    is_registered,
+    validate_node_name,
+)
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "__version__",
@@ -53,4 +67,12 @@ __all__ = [
     "parse_json",
     "parse_json_with_retry",
     "build_retry_feedback_turn",
+    # peer_registry
+    "KNOWN_ALIASES",
+    "NAMING_CONVENTION_REGEX",
+    "GatewayUnreachableError",
+    "NotInRegistry",
+    "canonical_names",
+    "is_registered",
+    "validate_node_name",
 ]
