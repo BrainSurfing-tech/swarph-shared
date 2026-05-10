@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "swarph-shared"
-version = "0.2.0"
-description = "Shared substrate primitives for swarph-mesh ecosystem (caller convention, subprocess env scrubbing, JSON-mode harness, peer-name registry)."
+version = "0.3.0"
+description = "Shared substrate primitives for swarph-mesh ecosystem (caller convention, subprocess env scrubbing, JSON-mode harness, peer-name registry, cell.yaml schema). v0.3.0 adds the cell module per substrate-doc R7 §11.1.5 (O5) cell.yaml universal-genome relocation — pure dict→Cell parser; file I/O is swarph-cli's concern."
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"

@@ -1,7 +1,7 @@
 """swarph-shared — shared substrate primitives for the swarph-mesh ecosystem.
 
-Four small, single-purpose modules consumed by every swarph-mesh component
-(omega-boss, opus_subscription, future swarph-mesh package) so the substrate
+Five small, single-purpose modules consumed by every swarph-mesh component
+(omega-boss, opus_subscription, swarph-mesh, swarph-cli) so the substrate
 patterns stay consistent across producers:
 
   - caller_convention   — single source of truth for the dotted-slug caller
@@ -18,6 +18,13 @@ patterns stay consistent across producers:
                           drift table for observed contagion-aliases. Closes
                           the framing-contagion class observed in lab-claude
                           (Vector A) and drop (Vector B) incidents.
+  - cell                — universal cell.yaml schema (substrate-doc R7
+                          §11.1.5 (O5) cell.yaml universal-genome). Pure
+                          dict→Cell parser + dataclasses; file I/O is
+                          swarph-cli's concern at the operator-tooling
+                          layer. Schema FROZEN at "v1" per drop-mother
+                          review #890 (C2) discipline; v0.6 cell.yaml
+                          files keep working unchanged in v0.7+.
 
 The package is **MIT-licensed** and **pure stdlib** — zero runtime deps. Same
 pattern as phawkes / fisherrao / tailcor / diebold-yilmaz / hodgex
@@ -51,8 +58,19 @@ from swarph_shared.peer_registry import (
     is_registered,
     validate_node_name,
 )
+from swarph_shared.cell import (
+    Cell,
+    CellError,
+    Lineage,
+    PEER_NAME_RE,
+    SCHEMA_VERSION_V1,
+    VALID_PROVIDERS,
+    VALID_SCHEMA_VERSIONS,
+    parse_cell_dict,
+    validate_uuid_str,
+)
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 __all__ = [
     "__version__",
@@ -75,4 +93,14 @@ __all__ = [
     "canonical_names",
     "is_registered",
     "validate_node_name",
+    # cell (v0.3.0 — substrate-doc R7 §11.1.5 (O5) relocation)
+    "Cell",
+    "CellError",
+    "Lineage",
+    "PEER_NAME_RE",
+    "SCHEMA_VERSION_V1",
+    "VALID_PROVIDERS",
+    "VALID_SCHEMA_VERSIONS",
+    "parse_cell_dict",
+    "validate_uuid_str",
 ]
