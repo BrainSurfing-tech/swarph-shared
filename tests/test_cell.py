@@ -12,7 +12,7 @@ from swarph_shared.cell import (
     Lineage,
     PEER_NAME_RE,
     SCHEMA_VERSION_V1,
-    VALID_PROVIDERS_V0_7,
+    VALID_PROVIDERS,
     VALID_SCHEMA_VERSIONS,
     parse_cell_dict,
     validate_uuid_str,
@@ -30,7 +30,7 @@ def test_schema_version_v1_is_only_supported_version():
 
 
 def test_valid_providers_v0_7_is_claude_only():
-    assert VALID_PROVIDERS_V0_7 == frozenset({"claude"})
+    assert VALID_PROVIDERS == frozenset({"claude"})
 
 
 def test_peer_name_re_accepts_kebab_and_snake():

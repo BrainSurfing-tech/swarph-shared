@@ -48,10 +48,14 @@ VALID_SCHEMA_VERSIONS = frozenset({SCHEMA_VERSION_V1})
 # discipline — kebab/snake-case, no spaces, no leading hyphen.
 PEER_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{1,63}$")
 
-# Provider whitelist for the spawn path. v0.7 ships claude-only;
+# Provider whitelist for the spawn path. Currently claude-only;
 # non-Claude provider spawn (gemini/deepseek long-lived sessions)
-# graduates per the v0.8+ scope per substrate-doc R7 §11.1.5 (O5).
-VALID_PROVIDERS_V0_7 = frozenset({"claude"})
+# graduates per substrate-doc R7 §11.1.5 (O5). Per-version gates live
+# in the docstring, not the symbol name (beta #1010 review observation):
+# additive-optional new providers extend this frozenset without
+# breaking existing imports. Schema_version on Cell carries version
+# semantics; constants don't need redundant version tagging.
+VALID_PROVIDERS = frozenset({"claude"})
 
 
 class CellError(ValueError):
@@ -236,10 +240,10 @@ def parse_cell_dict(
         if not starter_path.is_absolute() and base_dir is not None:
             starter_path = (base_dir / starter_path).resolve()
 
-    if provider not in VALID_PROVIDERS_V0_7:
+    if provider not in VALID_PROVIDERS:
         raise CellError(
-            f"cell.yaml: provider {provider!r} is not supported in v0.7 "
-            f"(valid: {sorted(VALID_PROVIDERS_V0_7)}). "
+            f"cell.yaml: provider {provider!r} is not in the supported "
+            f"provider set (valid: {sorted(VALID_PROVIDERS)}). "
             "Non-Claude provider spawn is queued for v0.8+."
         )
 
