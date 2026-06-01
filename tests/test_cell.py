@@ -264,3 +264,55 @@ def test_v0_6_cell_yaml_shape_parses_unchanged():
     assert cell.schema_version == "v1"  # default-applied
     assert cell.provider == "claude"  # default-applied
     assert cell.lineage is None  # absent
+
+
+# ---------------------------------------------------------------------------
+# assisted_memory
+# ---------------------------------------------------------------------------
+
+
+def test_parse_assisted_memory_enabled_valid():
+    cell = parse_cell_dict(_minimal_dict(assisted_memory={"enabled": True, "repo": "test/repo", "interval_min": 10}))
+    assert cell.assisted_memory is not None
+    assert cell.assisted_memory["enabled"] is True
+    assert cell.assisted_memory["repo"] == "test/repo"
+    assert cell.assisted_memory["interval_min"] == 10
+
+
+def test_parse_assisted_memory_enabled_without_repo_rejects():
+    with pytest.raises(CellError, match="repo.*required"):
+        parse_cell_dict(_minimal_dict(assisted_memory={"enabled": True}))
+
+
+def test_parse_assisted_memory_enabled_empty_repo_rejects():
+    with pytest.raises(CellError, match="repo.*required"):
+        parse_cell_dict(_minimal_dict(assisted_memory={"enabled": True, "repo": "   "}))
+
+
+def test_parse_assisted_memory_disabled_no_repo_valid():
+    cell = parse_cell_dict(_minimal_dict(assisted_memory={"enabled": False}))
+    assert cell.assisted_memory is not None
+    assert cell.assisted_memory["enabled"] is False
+    assert cell.assisted_memory.get("repo") is None
+    assert cell.assisted_memory["interval_min"] == 15
+
+
+def test_parse_assisted_memory_absent_valid():
+    cell = parse_cell_dict(_minimal_dict())
+    assert cell.assisted_memory is None
+
+
+def test_parse_assisted_memory_invalid_type_rejects():
+    with pytest.raises(CellError, match="must be a mapping"):
+        parse_cell_dict(_minimal_dict(assisted_memory="not-a-dict"))
+
+
+def test_parse_assisted_memory_invalid_enabled_type_rejects():
+    with pytest.raises(CellError, match="enabled.*boolean"):
+        parse_cell_dict(_minimal_dict(assisted_memory={"enabled": "true", "repo": "test/repo"}))
+
+
+def test_parse_assisted_memory_invalid_interval_min_rejects():
+    with pytest.raises(CellError, match="interval_min.*positive integer"):
+        parse_cell_dict(_minimal_dict(assisted_memory={"enabled": True, "repo": "test", "interval_min": -5}))
+

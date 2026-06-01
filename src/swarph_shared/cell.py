@@ -126,6 +126,7 @@ class Cell:
     sandbox: Optional[str] = None
     lineage: Optional[Lineage] = None
     source_path: Optional[Path] = None
+    assisted_memory: Optional[dict[str, Any]] = None
     extra: dict[str, Any] = field(default_factory=dict)
 
 
@@ -190,6 +191,7 @@ def parse_cell_dict(
     provider = raw.pop("provider", "claude")
     sandbox = raw.pop("sandbox", None)
     identity = raw.pop("identity", None)
+    assisted_memory_raw = raw.pop("assisted_memory", None)
 
     if schema_version not in VALID_SCHEMA_VERSIONS:
         raise CellError(
@@ -257,6 +259,30 @@ def parse_cell_dict(
             )
         sandbox = sandbox.strip()
 
+    assisted_memory: Optional[dict[str, Any]] = None
+    if assisted_memory_raw is not None:
+        if not isinstance(assisted_memory_raw, dict):
+            raise CellError(
+                f"cell.yaml: 'assisted_memory' must be a mapping; got "
+                f"{type(assisted_memory_raw).__name__}"
+            )
+        enabled = assisted_memory_raw.get("enabled", False)
+        if not isinstance(enabled, bool):
+            raise CellError("cell.yaml: 'assisted_memory.enabled' must be a boolean")
+        repo = assisted_memory_raw.get("repo")
+        if enabled:
+            if not isinstance(repo, str) or not repo.strip():
+                raise CellError("cell.yaml: 'assisted_memory.repo' is required and must be a non-empty string when enabled is true")
+        interval_min = assisted_memory_raw.get("interval_min", 15)
+        if not isinstance(interval_min, int) or interval_min <= 0:
+            raise CellError("cell.yaml: 'assisted_memory.interval_min' must be a positive integer")
+        
+        assisted_memory = {
+            "enabled": enabled,
+            "repo": repo,
+            "interval_min": interval_min,
+        }
+
     lineage_obj: Optional[Lineage] = None
     if identity is not None:
         if not isinstance(identity, dict):
@@ -288,5 +314,6 @@ def parse_cell_dict(
         sandbox=sandbox,
         lineage=lineage_obj,
         source_path=None,  # Caller (swarph-cli) sets this when reading from disk
+        assisted_memory=assisted_memory,
         extra=raw,  # whatever's left — preserved for forward-compat
     )
