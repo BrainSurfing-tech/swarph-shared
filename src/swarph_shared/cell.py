@@ -44,9 +44,14 @@ window per ``swarph-mesh`` DEPRECATIONS discipline."""
 
 VALID_SCHEMA_VERSIONS = frozenset({SCHEMA_VERSION_V1})
 
-# Conservative peer-name pattern, mirrors swarph_shared.peer_registry
-# discipline — kebab/snake-case, no spaces, no leading hyphen.
-PEER_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{1,63}$")
+# Peer-name pattern. Imported (not re-derived) from peer_registry so the
+# cell-boot check and the mesh send-boundary check are THE SAME object —
+# a cell that boots is guaranteed mesh-addressable. These used to diverge
+# (this allowed underscores + trailing dash, the registry did not), letting a
+# cell boot under a name the mesh would reject (adversarial-sweep MED). The
+# canonical format is kebab-case (lowercase alnum + internal dash, 2–64 chars,
+# NO underscore) — see swarph_shared.peer_registry.NAMING_CONVENTION_REGEX.
+from swarph_shared.peer_registry import NAMING_CONVENTION_REGEX as PEER_NAME_RE  # noqa: E402
 
 # Provider whitelist for the spawn path. Per-version gates live in the
 # docstring, not the symbol name (beta #1010 review observation):
@@ -87,7 +92,7 @@ class Cell:
     relocation only per PR-D. v0.6 cell.yaml files keep working unchanged.
 
     Fields:
-      name              kebab/snake-case peer name (PEER_NAME_RE-validated)
+      name              kebab-case mesh-addressable peer name (PEER_NAME_RE-validated)
       role              claude --name display value; sibling slots get
                         ``<role>-N`` suffix at the swarph-cli operator-
                         tooling layer (slot allocation is NOT
@@ -202,8 +207,8 @@ def parse_cell_dict(
 
     if not isinstance(name, str) or not PEER_NAME_RE.match(name):
         raise CellError(
-            f"cell.yaml: 'name' must be a kebab/snake-case peer name "
-            f"matching {PEER_NAME_RE.pattern}; got {name!r}"
+            f"cell.yaml: 'name' must be a kebab-case, mesh-addressable peer "
+            f"name matching {PEER_NAME_RE.pattern}; got {name!r}"
         )
     if not isinstance(role, str) or not role.strip():
         raise CellError(

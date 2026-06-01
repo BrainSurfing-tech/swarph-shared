@@ -53,6 +53,7 @@ from swarph_shared.peer_registry import (
     KNOWN_ALIASES,
     NAMING_CONVENTION_REGEX,
     GatewayUnreachableError,
+    MalformedPeerListError,
     NotInRegistry,
     canonical_names,
     is_registered,
@@ -70,7 +71,7 @@ from swarph_shared.cell import (
     validate_uuid_str,
 )
 
-__version__ = "0.3.1"
+__version__ = "0.3.2"
 
 __all__ = [
     "__version__",
@@ -89,6 +90,7 @@ __all__ = [
     "KNOWN_ALIASES",
     "NAMING_CONVENTION_REGEX",
     "GatewayUnreachableError",
+    "MalformedPeerListError",
     "NotInRegistry",
     "canonical_names",
     "is_registered",

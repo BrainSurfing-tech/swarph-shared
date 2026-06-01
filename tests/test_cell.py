@@ -33,11 +33,10 @@ def test_valid_providers_include_claude_codex_antigravity():
     assert VALID_PROVIDERS == frozenset({"claude", "codex", "antigravity"})
 
 
-def test_peer_name_re_accepts_kebab_and_snake():
-    # Regex requires 2+ chars (anchor `[a-z]` followed by `[a-z0-9_-]{1,63}`),
-    # rejects 1-char names. That's intentional — peer names should be
+def test_peer_name_re_accepts_kebab():
+    # Regex requires 2+ chars (rejects 1-char names) — peer names should be
     # discoverable + greppable, not bare-letter identifiers.
-    for name in ("lab-ovh", "drop", "drop-on-meta-edge", "lab_ovh", "ab"):
+    for name in ("lab-ovh", "drop", "drop-on-meta-edge", "ab"):
         assert PEER_NAME_RE.match(name), f"expected match: {name!r}"
 
 
@@ -48,6 +47,21 @@ def test_peer_name_re_rejects_single_char():
 def test_peer_name_re_rejects_uppercase_and_leading_special():
     for name in ("Lab-OVH", "-lab", "_lab", "1lab", "", "lab ovh"):
         assert not PEER_NAME_RE.match(name), f"expected reject: {name!r}"
+
+
+def test_peer_name_re_rejects_underscore_and_trailing_dash():
+    # Underscores + trailing dash used to pass the cell check but FAIL the
+    # mesh send-boundary (NAMING_CONVENTION_REGEX) — boot-but-unaddressable.
+    # PEER_NAME_RE now IS the registry regex, so these are rejected at boot.
+    for name in ("lab_ovh", "foo-", "foo_", "a" * 65):
+        assert not PEER_NAME_RE.match(name), f"expected reject: {name!r}"
+
+
+def test_peer_name_re_is_the_registry_regex():
+    # Single source of truth: a cell that boots is guaranteed mesh-addressable.
+    from swarph_shared.peer_registry import NAMING_CONVENTION_REGEX
+
+    assert PEER_NAME_RE is NAMING_CONVENTION_REGEX
 
 
 # ---------------------------------------------------------------------------
@@ -172,14 +186,14 @@ def test_parse_top_level_must_be_dict():
 
 
 def test_parse_rejects_invalid_peer_name():
-    with pytest.raises(CellError, match="kebab/snake-case"):
+    with pytest.raises(CellError, match="kebab-case"):
         parse_cell_dict(_minimal_dict(name="UPPER_CASE"))
 
 
 def test_parse_rejects_missing_name():
     raw = _minimal_dict()
     del raw["name"]
-    with pytest.raises(CellError, match="kebab/snake-case"):
+    with pytest.raises(CellError, match="kebab-case"):
         parse_cell_dict(raw)
 
 

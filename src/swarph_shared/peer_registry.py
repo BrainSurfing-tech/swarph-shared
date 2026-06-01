@@ -53,11 +53,17 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 #: Regex enforcing canonical peer-name shape: lowercase, alphanumeric +
-#: dash, must start and end with alphanumeric. Examples that pass:
-#: ``lab-ovh``, ``droplet``, ``science-claude``. Examples that fail:
+#: dash, must start and end with alphanumeric, 2–64 chars. Examples that
+#: pass: ``lab-ovh``, ``droplet``, ``science-claude``. Examples that fail:
 #: ``Lab-Ovh`` (uppercase), ``lab_ovh`` (underscore), ``-droplet`` /
-#: ``droplet-`` (leading/trailing dash).
-NAMING_CONVENTION_REGEX = re.compile(r"^[a-z][a-z0-9-]*[a-z0-9]$")
+#: ``droplet-`` (leading/trailing dash), ``x`` (single char).
+#:
+#: This is THE canonical peer-name format for the whole substrate.
+#: ``cell.PEER_NAME_RE`` imports this exact object (single source of truth)
+#: so a cell that boots is guaranteed mesh-addressable — the two used to
+#: diverge (cell allowed underscores + trailing dash), which let a cell boot
+#: under a name the mesh send-boundary would reject (adversarial-sweep MED).
+NAMING_CONVENTION_REGEX = re.compile(r"^[a-z][a-z0-9-]{0,62}[a-z0-9]$")
 
 #: ``{alias: canonical}`` drift-mapping for OBSERVED contagion aliases.
 #:
@@ -114,6 +120,15 @@ class NotInRegistry(ValueError):
     alias resolution but is not present in the gateway registry."""
 
 
+class MalformedPeerListError(RuntimeError):
+    """Raised by :func:`_fetch_canonical_names` when ``/peers`` returns a
+    shape the parser does not recognize (non-list ``peers``, or a non-empty
+    list from which NO entry yielded a name). Treated like
+    :class:`GatewayUnreachableError` by :func:`canonical_names` so an
+    unrecognized shape triggers stale-cache fallback / fail-loud rather than
+    caching a bogus empty set that would mass-false-negative every peer."""
+
+
 # ---------------------------------------------------------------------------
 # Cache (module-level, single-process)
 # ---------------------------------------------------------------------------
@@ -148,14 +163,45 @@ def _fetch_canonical_names(
     # Accept either {"peers": [...]} or a bare list — different gateway
     # versions have shipped both shapes.
     peers = payload.get("peers", payload) if isinstance(payload, dict) else payload
+    if not isinstance(peers, list):
+        # Unrecognized shape (e.g. {"data": {"peers": [...]}}, or peers: null).
+        # Refuse — caching a bogus empty set would false-negative every peer.
+        raise MalformedPeerListError(
+            f"/peers returned a non-list 'peers' ({type(peers).__name__}); "
+            "unrecognized gateway shape"
+        )
     names = []
+    dropped = 0
     for entry in peers:
         if isinstance(entry, str):
             names.append(entry)
         elif isinstance(entry, dict):
-            n = entry.get("node_name") or entry.get("name") or entry.get("id")
+            n = (
+                entry.get("node_name")
+                or entry.get("name")
+                or entry.get("id")
+                or entry.get("peer_name")
+            )
             if n:
                 names.append(n)
+            else:
+                dropped += 1
+        else:
+            dropped += 1
+    if dropped:
+        logger.warning(
+            "peer_registry: dropped %d /peers entr%s with no extractable name",
+            dropped,
+            "y" if dropped == 1 else "ies",
+        )
+    if peers and not names:
+        # Non-empty list but nothing parsed — an entry-shape mismatch, not a
+        # legitimately empty registry. Fail loud rather than cache an empty set.
+        raise MalformedPeerListError(
+            f"/peers returned {len(peers)} entr"
+            f"{'y' if len(peers) == 1 else 'ies'} but none yielded a name "
+            "(unrecognized entry shape)"
+        )
     return frozenset(names)
 
 
@@ -216,7 +262,21 @@ def canonical_names(
         return _cache["names"]
 
     gw = gateway_url or DEFAULT_GATEWAY_URL
-    tok = token if token is not None else os.getenv(GATEWAY_TOKEN_ENV)
+    # Normalize empty/whitespace token to None BEFORE the env fallback. A
+    # caller passing token="" (an unset-but-present config key) previously
+    # short-circuited the env lookup (``token is not None``) and then sent the
+    # /peers request with NO Authorization header — silently anonymous. Now an
+    # empty explicit token falls through to the env var, and a blank result
+    # becomes None (no header) only when nothing is configured.
+    explicit_blank = token is not None and not str(token).strip()
+    tok = (token or os.getenv(GATEWAY_TOKEN_ENV) or "").strip() or None
+    if explicit_blank and tok is None:
+        logger.warning(
+            "peer_registry: an explicit empty token was passed and %s is "
+            "unset/empty; querying %s/peers UNAUTHENTICATED",
+            GATEWAY_TOKEN_ENV,
+            gw,
+        )
 
     try:
         names = _fetch_canonical_names(gw, tok, timeout_seconds)
@@ -228,6 +288,7 @@ def canonical_names(
         urllib.error.HTTPError,
         OSError,
         json.JSONDecodeError,
+        MalformedPeerListError,
     ) as exc:
         # Graceful degradation: stale-cache fallback within grace window.
         if (

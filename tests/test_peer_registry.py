@@ -24,12 +24,23 @@ from swarph_shared.peer_registry import (
     KNOWN_ALIASES,
     NAMING_CONVENTION_REGEX,
     GatewayUnreachableError,
+    MalformedPeerListError,
     NotInRegistry,
     canonical_names,
     is_registered,
     validate_node_name,
     _clear_cache,
 )
+
+
+def _mock_raw_body(payload) -> MagicMock:
+    """Context-manager mock returning an arbitrary JSON payload body."""
+    body = json.dumps(payload).encode()
+    mock = MagicMock()
+    mock.read.return_value = body
+    mock.__enter__ = MagicMock(return_value=mock)
+    mock.__exit__ = MagicMock(return_value=False)
+    return mock
 
 
 # ---------------------------------------------------------------------------
@@ -340,3 +351,92 @@ def test_not_in_registry_after_alias_resolution():
     ):
         with pytest.raises(NotInRegistry):
             validate_node_name("drop")
+
+
+# ===========================================================================
+# Malformed /peers shape — fail loud, don't cache a bogus empty set
+# (adversarial-sweep MED, peer_registry.py:150)
+# ===========================================================================
+
+
+def test_malformed_non_list_peers_does_not_cache_empty():
+    """A {"data": {"peers": [...]}} shape → payload.get('peers', payload)
+    returns the dict itself (non-list) → MalformedPeerListError, surfaced as
+    GatewayUnreachableError (no cache), NOT a silently-cached empty set."""
+    with patch(
+        "urllib.request.urlopen",
+        return_value=_mock_raw_body({"data": {"peers": [{"node_name": "a"}]}}),
+    ):
+        with pytest.raises(GatewayUnreachableError):
+            canonical_names()
+
+
+def test_malformed_nonempty_list_no_names_raises():
+    """Non-empty list whose entries yield no name (unrecognized entry shape)
+    is a shape mismatch, not an empty registry → raise rather than cache."""
+    with patch(
+        "urllib.request.urlopen",
+        return_value=_mock_raw_body([{"weird_key": "x"}, {"other": "y"}]),
+    ):
+        with pytest.raises(GatewayUnreachableError):
+            canonical_names()
+
+
+def test_empty_list_is_legitimately_empty_registry():
+    """An empty list is a real (if unusual) empty registry — NOT malformed."""
+    with patch("urllib.request.urlopen", return_value=_mock_raw_body([])):
+        assert canonical_names() == frozenset()
+
+
+def test_peer_name_key_fallback_extracted():
+    """Entries keyed 'peer_name' (a shipped gateway variant) are extracted."""
+    with patch(
+        "urllib.request.urlopen",
+        return_value=_mock_raw_body([{"peer_name": "lab-ovh"}]),
+    ):
+        assert canonical_names() == frozenset({"lab-ovh"})
+
+
+def test_malformed_peer_list_error_is_exported():
+    assert issubclass(MalformedPeerListError, Exception)
+
+
+# ===========================================================================
+# Empty-string token must not silently disable auth (peer_registry.py:219)
+# ===========================================================================
+
+
+def _capture_request():
+    """Patch urlopen to capture the urllib Request and return an empty list."""
+    captured = {}
+
+    def fake_urlopen(req, timeout=None):
+        captured["req"] = req
+        return _mock_raw_body([])
+
+    return captured, fake_urlopen
+
+
+def test_empty_token_falls_through_to_env(monkeypatch):
+    """token='' must NOT short-circuit the env fallback — the real
+    MESH_GATEWAY_TOKEN env value must still produce an Authorization header."""
+    monkeypatch.setenv("MESH_GATEWAY_TOKEN", "env-tok")
+    captured, fake = _capture_request()
+    with patch("urllib.request.urlopen", side_effect=fake):
+        canonical_names(token="", ttl_seconds=0)
+    assert captured["req"].get_header("Authorization") == "Bearer env-tok"
+
+
+def test_empty_token_and_no_env_is_anonymous_with_warning(monkeypatch, caplog):
+    """token='' + unset env → anonymous request (no header) AND a loud
+    warning, instead of silently sending unauthenticated."""
+    monkeypatch.delenv("MESH_GATEWAY_TOKEN", raising=False)
+    captured, fake = _capture_request()
+    import logging
+
+    with caplog.at_level(logging.WARNING), patch(
+        "urllib.request.urlopen", side_effect=fake
+    ):
+        canonical_names(token="", ttl_seconds=0)
+    assert captured["req"].get_header("Authorization") is None
+    assert any("UNAUTHENTICATED" in r.message for r in caplog.records)

@@ -62,23 +62,22 @@ def parse_json(text: str) -> tuple[Optional[dict], Optional[str]]:
         return json.loads(text), None
     except json.JSONDecodeError:
         pass
-    # Try to extract first balanced object
+    # Try to extract the first JSON object embedded in prose. Use the stdlib
+    # scanner (raw_decode) from the first ``{`` rather than a hand-rolled
+    # brace counter: raw_decode correctly tracks string literals + escapes, so
+    # a ``{`` or ``}`` INSIDE a string value (code snippets, regex, prose with
+    # braces) no longer truncates an otherwise-valid object. The old depth
+    # counter closed at the first in-string ``}`` and sliced invalid JSON.
     start = text.find("{")
     if start < 0:
         return None, "no JSON object in response"
-    depth = 0
-    for i in range(start, len(text)):
-        ch = text[i]
-        if ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                try:
-                    return json.loads(text[start:i + 1]), None
-                except json.JSONDecodeError as e2:
-                    return None, str(e2)
-    return None, "unbalanced braces"
+    try:
+        obj, _end = json.JSONDecoder().raw_decode(text, start)
+    except json.JSONDecodeError as e2:
+        return None, str(e2)
+    if not isinstance(obj, dict):
+        return None, "no JSON object in response"
+    return obj, None
 
 
 def build_retry_feedback_turn(error: str) -> str:

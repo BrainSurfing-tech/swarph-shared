@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "swarph-shared"
-version = "0.3.1"
-description = "Shared substrate primitives for swarph-mesh ecosystem (caller convention, subprocess env scrubbing, JSON-mode harness, peer-name registry, cell.yaml schema). v0.3.1 hardens subprocess_env to close the ANTHROPIC_AUTH_TOKEN/*_BASE_URL billing-redirect class (adversarial-sweep CRIT)."
+version = "0.3.2"
+description = "Shared substrate primitives for swarph-mesh ecosystem (caller convention, subprocess env scrubbing, JSON-mode harness, peer-name registry, cell.yaml schema). v0.3.2 bundles the adversarial-sweep hardening: subprocess_env billing-redirect scrub, string-aware JSON brace extraction, and peer_registry empty-token/malformed-shape/regex-unification fixes."
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"

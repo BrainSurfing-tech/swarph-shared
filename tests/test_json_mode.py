@@ -176,3 +176,24 @@ def test_retry_invoked_only_once():
     assert parsed is None
     assert err_class == "malformed_json"
     assert call_count[0] == 1, "harness must retry exactly once, not recursively"
+
+
+# ============================================================================
+# parse_json — string-aware brace extraction (adversarial-sweep HIGH)
+# ============================================================================
+
+def test_parse_json_brace_inside_string_value():
+    """A `}` INSIDE a string value must not truncate the prose-extraction
+    fallback. The old depth counter closed at the first in-string `}` and
+    sliced invalid JSON, silently failing valid objects + burning a retry."""
+    parsed, err = parse_json('prose {"a": "}"} trailing')
+    assert err is None
+    assert parsed == {"a": "}"}
+
+
+def test_parse_json_nested_and_escaped_braces_in_strings():
+    parsed, err = parse_json(
+        'Here: {"code": "if (x) { return {}; }", "re": "\\\\{[0-9]\\\\}"} done'
+    )
+    assert err is None
+    assert parsed == {"code": "if (x) { return {}; }", "re": "\\{[0-9]\\}"}
