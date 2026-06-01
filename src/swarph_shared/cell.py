@@ -48,14 +48,12 @@ VALID_SCHEMA_VERSIONS = frozenset({SCHEMA_VERSION_V1})
 # discipline — kebab/snake-case, no spaces, no leading hyphen.
 PEER_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{1,63}$")
 
-# Provider whitelist for the spawn path. Currently claude-only;
-# non-Claude provider spawn (gemini/deepseek long-lived sessions)
-# graduates per substrate-doc R7 §11.1.5 (O5). Per-version gates live
-# in the docstring, not the symbol name (beta #1010 review observation):
-# additive-optional new providers extend this frozenset without
-# breaking existing imports. Schema_version on Cell carries version
-# semantics; constants don't need redundant version tagging.
-VALID_PROVIDERS = frozenset({"claude"})
+# Provider whitelist for the spawn path. Per-version gates live in the
+# docstring, not the symbol name (beta #1010 review observation):
+# additive-optional new providers extend this frozenset without breaking
+# existing imports. Schema_version on Cell carries version semantics;
+# constants don't need redundant version tagging.
+VALID_PROVIDERS = frozenset({"claude", "codex", "antigravity"})
 
 
 class CellError(ValueError):
@@ -104,7 +102,10 @@ class Cell:
       starter_prompt_path  optional absolute path; readability is the
                         caller's concern (swarph-cli's load_cell + Cell
                         wrapper does the file read at runtime)
-      provider          "claude" only in v0.7; non-Claude deferred to v0.8+
+      provider          spawn membrane provider ("claude" or "codex")
+      sandbox           optional provider-specific sandbox policy. Shared
+                        schema validates only string shape; swarph-cli
+                        membranes validate provider-specific values.
       lineage           optional v2-tier reserved shape
       source_path       optional Path metadata, set by swarph-cli's
                         load_cell when reading from disk; left None when
@@ -122,6 +123,7 @@ class Cell:
     session_id: Optional[str] = None
     starter_prompt_path: Optional[Path] = None
     provider: str = "claude"
+    sandbox: Optional[str] = None
     lineage: Optional[Lineage] = None
     source_path: Optional[Path] = None
     extra: dict[str, Any] = field(default_factory=dict)
@@ -186,6 +188,7 @@ def parse_cell_dict(
     session_id = raw.pop("session_id", None)
     starter_prompt_raw = raw.pop("starter_prompt_path", None)
     provider = raw.pop("provider", "claude")
+    sandbox = raw.pop("sandbox", None)
     identity = raw.pop("identity", None)
 
     if schema_version not in VALID_SCHEMA_VERSIONS:
@@ -244,8 +247,15 @@ def parse_cell_dict(
         raise CellError(
             f"cell.yaml: provider {provider!r} is not in the supported "
             f"provider set (valid: {sorted(VALID_PROVIDERS)}). "
-            "Non-Claude provider spawn is queued for v0.8+."
+            "Unsupported provider spawn is queued for a future release."
         )
+
+    if sandbox is not None:
+        if not isinstance(sandbox, str) or not sandbox.strip():
+            raise CellError(
+                "cell.yaml: 'sandbox' must be a non-empty string"
+            )
+        sandbox = sandbox.strip()
 
     lineage_obj: Optional[Lineage] = None
     if identity is not None:
@@ -275,6 +285,7 @@ def parse_cell_dict(
         session_id=session_id,
         starter_prompt_path=starter_path,
         provider=provider,
+        sandbox=sandbox,
         lineage=lineage_obj,
         source_path=None,  # Caller (swarph-cli) sets this when reading from disk
         extra=raw,  # whatever's left — preserved for forward-compat
