@@ -29,8 +29,8 @@ def test_schema_version_v1_is_only_supported_version():
     assert VALID_SCHEMA_VERSIONS == frozenset({"v1"})
 
 
-def test_valid_providers_v0_7_is_claude_only():
-    assert VALID_PROVIDERS == frozenset({"claude"})
+def test_valid_providers_include_claude_and_codex():
+    assert VALID_PROVIDERS == frozenset({"claude", "codex"})
 
 
 def test_peer_name_re_accepts_kebab_and_snake():
@@ -96,9 +96,25 @@ def test_parse_minimal_required_fields():
     assert cell.schema_version == "v1"
     assert cell.session_id is None
     assert cell.starter_prompt_path is None
+    assert cell.sandbox is None
     assert cell.lineage is None
     assert cell.source_path is None
     assert cell.extra == {}
+
+
+def test_parse_codex_provider():
+    cell = parse_cell_dict(_minimal_dict(provider="codex"))
+    assert cell.provider == "codex"
+
+
+def test_parse_with_sandbox():
+    cell = parse_cell_dict(_minimal_dict(provider="codex", sandbox="read-only"))
+    assert cell.sandbox == "read-only"
+
+
+def test_parse_strips_sandbox_whitespace():
+    cell = parse_cell_dict(_minimal_dict(provider="codex", sandbox="  workspace-write  "))
+    assert cell.sandbox == "workspace-write"
 
 
 def test_parse_with_pinned_session_id():
@@ -199,9 +215,19 @@ def test_parse_rejects_unsupported_schema_version():
         parse_cell_dict(_minimal_dict(schema_version="v999"))
 
 
-def test_parse_rejects_non_claude_provider_in_v0_7():
-    with pytest.raises(CellError, match="v0.8"):
+def test_parse_rejects_unsupported_provider():
+    with pytest.raises(CellError, match="Unsupported provider"):
         parse_cell_dict(_minimal_dict(provider="gemini"))
+
+
+def test_parse_rejects_invalid_sandbox_type():
+    with pytest.raises(CellError, match="sandbox"):
+        parse_cell_dict(_minimal_dict(sandbox=12))
+
+
+def test_parse_rejects_empty_sandbox():
+    with pytest.raises(CellError, match="sandbox"):
+        parse_cell_dict(_minimal_dict(sandbox=""))
 
 
 def test_parse_rejects_invalid_starter_prompt_path_type():
