@@ -116,9 +116,20 @@ class Cell:
                         load_cell when reading from disk; left None when
                         the Cell came from a non-file source (e.g., S-G
                         spawn-context endpoint at v0.7+)
+      cursor_path       optional absolute path to the DM cursor.json the
+                        watchdog/sidecar watch for staleness. Graduated from
+                        the ``extra`` forward-compat bag to a typed field;
+                        also accepted inside an ``extra:`` block and still
+                        mirrored into ``extra`` for back-compat readers.
+      tmux_session      optional tmux session/target the watchdog A1 + sidecar
+                        send-keys wake into. Same graduation + mirroring as
+                        cursor_path.
       extra             unparsed top-level keys — preserved for forward-
                         compat (v0.7+ may attach meaning to ``mesh:``,
-                        ``capabilities:``, ``memory_mirror:`` etc.)
+                        ``capabilities:``, ``memory_mirror:`` etc.). An explicit
+                        ``extra:`` block is flattened into this bag (its keys
+                        treated as top-level) — fixes the prior double-nest
+                        where ``extra:`` survived into ``Cell.extra['extra']``.
     """
 
     name: str
@@ -132,6 +143,8 @@ class Cell:
     lineage: Optional[Lineage] = None
     source_path: Optional[Path] = None
     assisted_memory: Optional[dict[str, Any]] = None
+    cursor_path: Optional[str] = None
+    tmux_session: Optional[str] = None
     extra: dict[str, Any] = field(default_factory=dict)
 
 
@@ -197,6 +210,27 @@ def parse_cell_dict(
     sandbox = raw.pop("sandbox", None)
     identity = raw.pop("identity", None)
     assisted_memory_raw = raw.pop("assisted_memory", None)
+    cursor_path = raw.pop("cursor_path", None)
+    tmux_session = raw.pop("tmux_session", None)
+
+    # F4 fix: flatten an explicit `extra:` block into the forward-compat bag.
+    # Previously a top-level `extra:` key was never popped, so it survived into
+    # Cell.extra['extra'] (double-nest) and extra.get('cursor_path') resolved
+    # None -> silent watchdog fallback. Treat its keys as top-level; nested
+    # pins populate the typed fields only if not already set at top level.
+    explicit_extra = raw.pop("extra", None)
+    if explicit_extra is not None:
+        if not isinstance(explicit_extra, dict):
+            raise CellError(
+                f"cell.yaml: 'extra' must be a mapping; got "
+                f"{type(explicit_extra).__name__}"
+            )
+        if cursor_path is None:
+            cursor_path = explicit_extra.get("cursor_path")
+        if tmux_session is None:
+            tmux_session = explicit_extra.get("tmux_session")
+        for k, v in explicit_extra.items():
+            raw.setdefault(k, v)
 
     if schema_version not in VALID_SCHEMA_VERSIONS:
         raise CellError(
@@ -308,6 +342,26 @@ def parse_cell_dict(
                 ),
             )
 
+    for _pin_name, _pin_val in (("cursor_path", cursor_path), ("tmux_session", tmux_session)):
+        if _pin_val is not None and (not isinstance(_pin_val, str) or not _pin_val.strip()):
+            raise CellError(
+                f"cell.yaml: {_pin_name!r} must be a non-empty string; got "
+                f"{type(_pin_val).__name__}"
+            )
+    if cursor_path is not None:
+        cursor_path = cursor_path.strip()
+    if tmux_session is not None:
+        tmux_session = tmux_session.strip()
+
+    # Graduate-to-typed-field preserves the extra-dict reading path: mirror the
+    # pins back into the forward-compat bag so existing readers that do
+    # extra.get('cursor_path') / extra.get('tmux_session') keep working
+    # alongside the new typed Cell.cursor_path / Cell.tmux_session attributes.
+    if cursor_path is not None:
+        raw.setdefault("cursor_path", cursor_path)
+    if tmux_session is not None:
+        raw.setdefault("tmux_session", tmux_session)
+
     return Cell(
         name=name,
         role=role.strip(),
@@ -320,5 +374,7 @@ def parse_cell_dict(
         lineage=lineage_obj,
         source_path=None,  # Caller (swarph-cli) sets this when reading from disk
         assisted_memory=assisted_memory,
+        cursor_path=cursor_path,
+        tmux_session=tmux_session,
         extra=raw,  # whatever's left — preserved for forward-compat
     )

@@ -330,3 +330,69 @@ def test_parse_assisted_memory_invalid_interval_min_rejects():
     with pytest.raises(CellError, match="interval_min.*positive integer"):
         parse_cell_dict(_minimal_dict(assisted_memory={"enabled": True, "repo": "test", "interval_min": -5}))
 
+
+
+# --- F4 fix: cursor_path / tmux_session typed fields + extra: flatten ---
+
+_F4_BASE = {
+    "schema_version": "v1",
+    "name": "gpu-wsl",
+    "role": "gpu-wsl",
+    "cwd": "/home/darw007d",
+    "provider": "claude",
+}
+
+
+def test_f4_nested_extra_block_no_longer_double_nests():
+    # The documented `extra:` block shape must populate the typed fields
+    # (regression: previously survived into Cell.extra['extra'] -> None).
+    cell = parse_cell_dict(
+        {**_F4_BASE, "extra": {"cursor_path": "/c.json", "tmux_session": "claude"}}
+    )
+    assert cell.cursor_path == "/c.json"
+    assert cell.tmux_session == "claude"
+    assert "extra" not in cell.extra  # flattened, not double-nested
+
+
+def test_f4_flat_top_level_pins_populate_typed_fields():
+    cell = parse_cell_dict(
+        {**_F4_BASE, "cursor_path": "/c.json", "tmux_session": "claude"}
+    )
+    assert cell.cursor_path == "/c.json"
+    assert cell.tmux_session == "claude"
+
+
+def test_f4_pins_mirrored_into_extra_for_backcompat_readers():
+    # graduate-to-typed-field preserves the extra-dict reading path
+    cell = parse_cell_dict(
+        {**_F4_BASE, "cursor_path": "/c.json", "tmux_session": "claude"}
+    )
+    assert cell.extra.get("cursor_path") == "/c.json"
+    assert cell.extra.get("tmux_session") == "claude"
+
+
+def test_f4_absent_pins_default_to_none():
+    cell = parse_cell_dict(dict(_F4_BASE))
+    assert cell.cursor_path is None
+    assert cell.tmux_session is None
+
+
+def test_f4_top_level_pin_wins_over_nested_extra():
+    cell = parse_cell_dict(
+        {
+            **_F4_BASE,
+            "cursor_path": "/top.json",
+            "extra": {"cursor_path": "/nested.json"},
+        }
+    )
+    assert cell.cursor_path == "/top.json"
+
+
+def test_f4_non_string_pin_raises_cellerror():
+    with pytest.raises(CellError):
+        parse_cell_dict({**_F4_BASE, "cursor_path": 123})
+
+
+def test_f4_non_mapping_extra_raises_cellerror():
+    with pytest.raises(CellError):
+        parse_cell_dict({**_F4_BASE, "extra": "not-a-dict"})
