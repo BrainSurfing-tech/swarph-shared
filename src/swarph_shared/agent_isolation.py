@@ -58,3 +58,37 @@ def build_isolated_env(source: Mapping[str, str], home: Path, provider: str) -> 
     scrub_provider_namespace(env, provider)
     env["HOME"] = str(home)
     return env
+
+
+_GITCONFIG = "[user]\n\tname = swarph drone\n\temail = drone@swarph.local\n[credential]\n\thelper =\n"
+
+
+def _link_auth(link: Path, target: Path) -> None:
+    """Idempotent best-effort symlink ``link`` -> ``target`` (mirrors _link_grok_auth)."""
+    if not target.exists():
+        return
+    try:
+        if link.is_symlink():
+            if link.readlink() == target:
+                return
+            link.unlink()          # stale/foreign/dangling → replace
+        elif link.exists():
+            return                 # never clobber a real file
+        link.parent.mkdir(parents=True, exist_ok=True)
+        link.symlink_to(target)
+    except OSError:
+        return                     # never crash a spawn
+
+
+def prepare_isolated_home(provider: str, root: Path, *, operator_home: Path | None = None) -> Path:
+    """Create root/.{provider}-drone-home carrying ONLY this provider's auth."""
+    op = operator_home if operator_home is not None else Path.home()
+    home = Path(root) / f".{provider}-drone-home"
+    try:
+        home.mkdir(parents=True, exist_ok=True)
+        for rel in PROVIDER_AUTH.get(provider, ()):
+            _link_auth(home / rel, Path(op) / rel)
+        (home / ".gitconfig").write_text(_GITCONFIG, encoding="utf-8")
+    except OSError:
+        pass                       # best-effort; a partial home is still a valid HOME
+    return home
