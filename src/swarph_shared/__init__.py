@@ -70,8 +70,13 @@ from swarph_shared.cell import (
     parse_cell_dict,
     validate_uuid_str,
 )
+from swarph_shared.agent_isolation import (
+    PROVIDER_AUTH,
+    build_isolated_env,
+    prepare_isolated_home,
+)
 
-__version__ = "0.3.3"
+__version__ = "0.4.0"
 
 __all__ = [
     "__version__",
@@ -82,6 +87,10 @@ __all__ = [
     "FORBIDDEN_KEYS_EXPLICIT",
     "scrub_env_for_subprocess",
     "verify_subscription_setup",
+    # agent_isolation
+    "PROVIDER_AUTH",
+    "build_isolated_env",
+    "prepare_isolated_home",
     # json_mode
     "parse_json",
     "parse_json_with_retry",
