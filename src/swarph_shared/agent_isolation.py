@@ -34,6 +34,36 @@ _PROVIDER_PREFIXES: dict[str, tuple[str, ...]] = {
 }
 _REDIRECT_SUFFIXES = ("_HOME", "_AUTH_PATH", "_AUTH_PROVIDER_COMMAND", "_CONFIG_DIR")
 
+#: Provider-INDEPENDENT credential channels that survive a forced HOME and would
+#: hand the spawned agent the operator's real credentials WITHOUT touching any
+#: file this module links. Forcing HOME alone does NOT close these — each is an
+#: env var read before, or instead of, the HOME-anchored path:
+#:   * SSH_AUTH_SOCK        — live ssh-agent socket → auth as operator over SSH,
+#:                            no ~/.ssh access needed.
+#:   * GH_*/GITHUB_* tokens — gh/git read these BEFORE ~/.config/gh.
+#:   * GH_CONFIG_DIR / XDG_* — redirect a tool's config dir back into operator
+#:                            space despite the forced HOME (gh: GH_CONFIG_DIR →
+#:                            $XDG_CONFIG_HOME/gh → $HOME/.config/gh).
+#:   * GIT_CONFIG_GLOBAL/SYSTEM — re-point git past the drone's own .gitconfig.
+#:   * GNUPGHOME            — gpg home redirect.
+#: (Security-review finding, 2026-07-13 — the negative must hold across env
+#: channels, not just the file path.)
+_CREDENTIAL_REDIRECT_KEYS = frozenset({
+    "SSH_AUTH_SOCK",
+    "GH_TOKEN",
+    "GITHUB_TOKEN",
+    "GH_ENTERPRISE_TOKEN",
+    "GITHUB_ENTERPRISE_TOKEN",
+    "GH_CONFIG_DIR",
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME",
+    "XDG_CACHE_HOME",
+    "XDG_STATE_HOME",
+    "GIT_CONFIG_GLOBAL",
+    "GIT_CONFIG_SYSTEM",
+    "GNUPGHOME",
+})
+
 
 def scrub_provider_namespace(env: dict, provider: str) -> None:
     """In-place: drop redirect keys in ``provider``'s namespace (best-effort)."""
@@ -53,7 +83,9 @@ def build_isolated_env(source: Mapping[str, str], home: Path, provider: str) -> 
     """
     env = {
         k: v for k, v in source.items()
-        if k not in FORBIDDEN_KEYS_EXPLICIT and not k.endswith(FORBIDDEN_SUFFIXES)
+        if k not in FORBIDDEN_KEYS_EXPLICIT
+        and k not in _CREDENTIAL_REDIRECT_KEYS
+        and not k.endswith(FORBIDDEN_SUFFIXES)
     }
     scrub_provider_namespace(env, provider)
     env["HOME"] = str(home)

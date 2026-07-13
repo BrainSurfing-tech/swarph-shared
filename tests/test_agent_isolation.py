@@ -18,6 +18,35 @@ def test_build_isolated_env_scrubs_billing_and_redirect():
     assert "CLAUDE_CONFIG_DIR" not in env, "a namespace redirect that would bypass forced HOME is scrubbed"
 
 
+def test_build_isolated_env_drops_credential_redirect_channels():
+    """Forcing HOME is not enough — env-var channels reach operator creds too.
+
+    Security-review finding 2026-07-13: SSH_AUTH_SOCK, GH_TOKEN/GITHUB_TOKEN,
+    GH_CONFIG_DIR, XDG_CONFIG_HOME, GIT_CONFIG_GLOBAL etc. all leak past a forced
+    HOME. They must be scrubbed.
+    """
+    src = {
+        "HOME": "/home/op", "PATH": "/usr/bin",
+        "SSH_AUTH_SOCK": "/tmp/ssh-agent.sock",
+        "GH_TOKEN": "ghp_x", "GITHUB_TOKEN": "ghp_y",
+        "GH_ENTERPRISE_TOKEN": "e1", "GITHUB_ENTERPRISE_TOKEN": "e2",
+        "GH_CONFIG_DIR": "/home/op/.config/gh",
+        "XDG_CONFIG_HOME": "/home/op/.config", "XDG_DATA_HOME": "/home/op/.local/share",
+        "XDG_CACHE_HOME": "/home/op/.cache", "XDG_STATE_HOME": "/home/op/.local/state",
+        "GIT_CONFIG_GLOBAL": "/home/op/.gitconfig", "GIT_CONFIG_SYSTEM": "/etc/gitconfig",
+        "GNUPGHOME": "/home/op/.gnupg",
+    }
+    env = ai.build_isolated_env(src, Path("/tmp/drone"), "claude")
+    for leaked in (
+        "SSH_AUTH_SOCK", "GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN",
+        "GITHUB_ENTERPRISE_TOKEN", "GH_CONFIG_DIR", "XDG_CONFIG_HOME", "XDG_DATA_HOME",
+        "XDG_CACHE_HOME", "XDG_STATE_HOME", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM",
+        "GNUPGHOME",
+    ):
+        assert leaked not in env, f"{leaked} must be scrubbed (credential-redirect bypass)"
+    assert env["PATH"] == "/usr/bin", "benign vars still pass through"
+
+
 def test_build_isolated_env_does_not_mutate_source():
     src = {"HOME": "/home/operator", "PATH": "/usr/bin"}
     ai.build_isolated_env(src, Path("/tmp/h"), "codex")
