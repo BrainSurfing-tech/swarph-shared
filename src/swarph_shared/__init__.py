@@ -75,8 +75,15 @@ from swarph_shared.agent_isolation import (
     build_isolated_env,
     prepare_isolated_home,
 )
+from swarph_shared.untrusted_repo_preflight import (
+    PreflightError,
+    default_run_git,
+    git_config_is_poisoned,
+    preflight,
+    safe_reader_flags,
+)
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 __all__ = [
     "__version__",
@@ -114,4 +121,10 @@ __all__ = [
     "VALID_SCHEMA_VERSIONS",
     "parse_cell_dict",
     "validate_uuid_str",
+    # untrusted_repo_preflight (v0.5.0 — SWAIRM Pattern #3 port; INERT)
+    "PreflightError",
+    "default_run_git",
+    "git_config_is_poisoned",
+    "preflight",
+    "safe_reader_flags",
 ]
