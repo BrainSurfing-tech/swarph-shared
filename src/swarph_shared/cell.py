@@ -58,7 +58,7 @@ from swarph_shared.peer_registry import NAMING_CONVENTION_REGEX as PEER_NAME_RE 
 # additive-optional new providers extend this frozenset without breaking
 # existing imports. Schema_version on Cell carries version semantics;
 # constants don't need redundant version tagging.
-VALID_PROVIDERS = frozenset({"claude", "codex", "antigravity", "grok"})
+VALID_PROVIDERS = frozenset({"claude", "codex", "antigravity", "grok", "vibe"})
 
 
 class CellError(ValueError):

@@ -29,8 +29,42 @@ def test_schema_version_v1_is_only_supported_version():
     assert VALID_SCHEMA_VERSIONS == frozenset({"v1"})
 
 
-def test_valid_providers_include_claude_codex_antigravity_grok():
-    assert VALID_PROVIDERS == frozenset({"claude", "codex", "antigravity", "grok"})
+def test_valid_providers_are_the_five_supported_lanes():
+    """Pins the EXACT set, so adding a provider is a deliberate edit here rather
+    than a silent widening. `vibe` (Mistral's lane) added 2026-08-05 — it was the
+    stated blocker on board #247, which could not build a VibeMembrane while
+    cell.yaml validation rejected the provider name."""
+    assert VALID_PROVIDERS == frozenset(
+        {"claude", "codex", "antigravity", "grok", "vibe"})
+
+
+def test_a_vibe_cell_yaml_VALIDATES_the_constant_is_not_the_whole_fix():
+    """>>> DECLARING THE NAME IS NOT ACCEPTING THE CELL. <<< The constant and the
+    validator are different things, and a change to the frozenset that did not
+    reach `validate` would pass the assertion above while still refusing every
+    vibe cell.yaml — the shape this mesh has now shipped four times (a field
+    declared but never written). So this asserts the PATH, not the symbol."""
+    cell = parse_cell_dict(
+        {"schema_version": "v1", "name": "vibe-1", "provider": "vibe",
+         "role": "worker", "cwd": "/tmp"},
+        base_dir=None,
+    )
+    assert cell.provider == "vibe"
+
+
+def test_an_UNKNOWN_provider_is_still_refused_and_the_error_NAMES_the_set():
+    """The negative leg. Without it, `validate` could have been changed to accept
+    anything and both tests above would still pass."""
+    import pytest
+    with pytest.raises(CellError) as e:
+        parse_cell_dict(
+            {"schema_version": "v1", "name": "vibe-neg", "provider": "not-a-provider",
+             "role": "worker", "cwd": "/tmp"},
+            base_dir=None,
+        )
+    assert "vibe" in str(e.value), (
+        "the refusal must list the supported set so a caller learns the rule: "
+        + str(e.value))
 
 
 def test_peer_name_re_accepts_kebab():

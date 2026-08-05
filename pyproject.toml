@@ -41,4 +41,11 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# >>> WITHOUT THIS, `pytest` IMPORTS THE **INSTALLED** swarph_shared AND NOT THE
+# WORKING TREE — a source edit is invisible to the suite and every test passes
+# having exercised the previously-released wheel. MEASURED 2026-08-05 adding
+# `vibe` to VALID_PROVIDERS: the contract test failed against site-packages
+# 0.5.0 while the tree already had the change, and `PYTHONPATH=src` flipped it.
+# A green suite that never loaded your code is the purest false green there is.
+pythonpath = ["src"]
 addopts = "-v --tb=short"
