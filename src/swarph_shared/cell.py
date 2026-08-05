@@ -71,7 +71,17 @@ from swarph_shared.peer_registry import NAMING_CONVENTION_REGEX as PEER_NAME_RE 
 # THIS PACKAGE CANNOT TEST THE INVARIANT — importing swarph-cli would be
 # circular — so the contract is carried here as text and enforced there as code.
 # That asymmetry is exactly why it must be written down at the WRITE site.
-VALID_PROVIDERS = frozenset({"claude", "codex", "antigravity", "grok"})
+VALID_PROVIDERS = frozenset({"claude", "codex", "antigravity", "grok", "vibe"})
+# >>> `vibe` RE-ADDED IN 0.6.2, THIS TIME IN THE CORRECT ORDER. 0.6.0 added it
+# FIRST and broke `swarph spawn` for every fresh install for ~5h, because
+# swarph-cli's guard is `VALID_PROVIDERS ⊆ MEMBRANES` and no VibeMembrane
+# existed. PRECONDITION FOR THIS RELEASE, verified before publishing:
+#   · swarph-cli 0.41.5 is ON PyPI carrying VibeMembrane      (checked /simple/)
+#   · it declares swarph-shared >=0.4.0,!=0.6.0,<0.7          -> 0.6.2 satisfies
+#   · the lab-ovh editable tree (5 live cells) has the membrane -> unmembraned=[]
+# ANYONE STILL ON swarph-cli 0.41.4 (unbounded pin, no membrane) WILL BREAK IF
+# THEY TAKE 0.6.2 WITHOUT UPGRADING THE CLI. The bound in 0.41.5 protects only
+# those who move; it cannot protect a release that predates it. <<<
 
 
 class CellError(ValueError):
