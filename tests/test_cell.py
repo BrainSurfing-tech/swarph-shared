@@ -29,27 +29,39 @@ def test_schema_version_v1_is_only_supported_version():
     assert VALID_SCHEMA_VERSIONS == frozenset({"v1"})
 
 
-def test_valid_providers_are_the_five_supported_lanes():
-    """Pins the EXACT set, so adding a provider is a deliberate edit here rather
-    than a silent widening. `vibe` (Mistral's lane) added 2026-08-05 — it was the
-    stated blocker on board #247, which could not build a VibeMembrane while
-    cell.yaml validation rejected the provider name."""
-    assert VALID_PROVIDERS == frozenset(
-        {"claude", "codex", "antigravity", "grok", "vibe"})
+def test_valid_providers_pins_the_set_AND_the_ORDERING_CONTRACT():
+    """Pins the EXACT set, so adding a provider is a deliberate edit rather than
+    a silent widening.
+
+    >>> AND THE EDIT IS NOT SAFE ON ITS OWN. swarph-cli's spawn.py holds
+    `VALID_PROVIDERS ⊆ MEMBRANES` and RAISES AT IMPORT if a name here has no
+    membrane there — so adding a provider BREAKS `swarph spawn` for everyone on
+    the new release until the membrane ships. MEMBRANE FIRST, THEN THIS SET. <<<
+
+    Measured: 0.6.0 added `vibe` here first (board #247's title said "blocked on
+    swarph-shared adding 'vibe' FIRST" — backwards), and every fresh
+    `pip install swarph-cli` broke for ~5h because the CLI pins only >=0.4.0 with
+    no upper bound. Reverted in 0.6.1.
+
+    THIS PACKAGE CANNOT ASSERT THE INVARIANT — importing swarph-cli is circular —
+    so whoever edits this line must carry it. That is what this docstring is for:
+    the test cannot fail on the ordering, only a reader can."""
+    assert VALID_PROVIDERS == frozenset({"claude", "codex", "antigravity", "grok"})
 
 
-def test_a_vibe_cell_yaml_VALIDATES_the_constant_is_not_the_whole_fix():
-    """>>> DECLARING THE NAME IS NOT ACCEPTING THE CELL. <<< The constant and the
-    validator are different things, and a change to the frozenset that did not
-    reach `validate` would pass the assertion above while still refusing every
-    vibe cell.yaml — the shape this mesh has now shipped four times (a field
-    declared but never written). So this asserts the PATH, not the symbol."""
-    cell = parse_cell_dict(
-        {"schema_version": "v1", "name": "vibe-1", "provider": "vibe",
-         "role": "worker", "cwd": "/tmp"},
-        base_dir=None,
-    )
-    assert cell.provider == "vibe"
+def test_a_vibe_cell_yaml_IS_REFUSED_UNTIL_THE_MEMBRANE_SHIPS():
+    """>>> REVERTED IN 0.6.1: a vibe cell.yaml is REFUSED again, deliberately,
+    until swarph-cli ships a VibeMembrane. <<< This is the honest state, not a
+    regression: `load_cell` rejecting the provider cleanly ("queued for a future
+    release") is exactly what spawn.py's guard comment says should happen while a
+    membrane is absent. Flip this test back — with the membrane — not before."""
+    with pytest.raises(CellError) as e:
+        parse_cell_dict(
+            {"schema_version": "v1", "name": "vibe-1", "provider": "vibe",
+             "role": "worker", "cwd": "/tmp"},
+            base_dir=None,
+        )
+    assert "vibe" in str(e.value)
 
 
 def test_an_UNKNOWN_provider_is_still_refused_and_the_error_NAMES_the_set():
@@ -62,9 +74,15 @@ def test_an_UNKNOWN_provider_is_still_refused_and_the_error_NAMES_the_set():
              "role": "worker", "cwd": "/tmp"},
             base_dir=None,
         )
-    assert "vibe" in str(e.value), (
-        "the refusal must list the supported set so a caller learns the rule: "
-        + str(e.value))
+    # >>> ASSERT AGAINST A MEMBER OF THE SET, NOT A HARDCODED NAME. The first
+    # version checked for "vibe" — which passed while vibe was supported and
+    # broke the moment it was reverted, testing the ROSTER instead of the
+    # PROPERTY. The property is: the refusal lists what IS supported. <<<
+    msg = str(e.value)
+    for supported in sorted(VALID_PROVIDERS):
+        assert supported in msg, (
+            f"the refusal omits the supported provider {supported!r}, so a caller "
+            f"cannot learn the rule from it: {msg}")
 
 
 def test_peer_name_re_accepts_kebab():
