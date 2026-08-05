@@ -58,7 +58,20 @@ from swarph_shared.peer_registry import NAMING_CONVENTION_REGEX as PEER_NAME_RE 
 # additive-optional new providers extend this frozenset without breaking
 # existing imports. Schema_version on Cell carries version semantics;
 # constants don't need redundant version tagging.
-VALID_PROVIDERS = frozenset({"claude", "codex", "antigravity", "grok", "vibe"})
+# >>> ORDERING CONTRACT — READ BEFORE ADDING A PROVIDER HERE. <<<
+# swarph-cli's spawn.py holds `VALID_PROVIDERS ⊆ MEMBRANES` and RAISES AT IMPORT
+# if a name here has no membrane there. So adding a provider to this frozenset
+# BREAKS `swarph spawn` for everyone on the new release until the membrane ships.
+#   MEMBRANE FIRST (harmless — an extra membrane is inert), THEN THIS SET.
+# Measured 2026-08-05: `vibe` was added here first, per board #247's title which
+# said "blocked on swarph-shared adding 'vibe' FIRST". That order is BACKWARDS
+# and spawn.py's own guard comment says so. 0.6.0 shipped it; every fresh
+# `pip install swarph-cli` broke (cli pins only >=0.4.0, no upper bound) for
+# ~5h. Reverted in 0.6.1.
+# THIS PACKAGE CANNOT TEST THE INVARIANT — importing swarph-cli would be
+# circular — so the contract is carried here as text and enforced there as code.
+# That asymmetry is exactly why it must be written down at the WRITE site.
+VALID_PROVIDERS = frozenset({"claude", "codex", "antigravity", "grok"})
 
 
 class CellError(ValueError):
