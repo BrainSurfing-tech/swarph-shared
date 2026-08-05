@@ -46,22 +46,24 @@ def test_valid_providers_pins_the_set_AND_the_ORDERING_CONTRACT():
     THIS PACKAGE CANNOT ASSERT THE INVARIANT — importing swarph-cli is circular —
     so whoever edits this line must carry it. That is what this docstring is for:
     the test cannot fail on the ordering, only a reader can."""
-    assert VALID_PROVIDERS == frozenset({"claude", "codex", "antigravity", "grok"})
+    assert VALID_PROVIDERS == frozenset(
+        {"claude", "codex", "antigravity", "grok", "vibe"})
 
 
-def test_a_vibe_cell_yaml_IS_REFUSED_UNTIL_THE_MEMBRANE_SHIPS():
-    """>>> REVERTED IN 0.6.1: a vibe cell.yaml is REFUSED again, deliberately,
-    until swarph-cli ships a VibeMembrane. <<< This is the honest state, not a
-    regression: `load_cell` rejecting the provider cleanly ("queued for a future
-    release") is exactly what spawn.py's guard comment says should happen while a
-    membrane is absent. Flip this test back — with the membrane — not before."""
-    with pytest.raises(CellError) as e:
-        parse_cell_dict(
-            {"schema_version": "v1", "name": "vibe-1", "provider": "vibe",
-             "role": "worker", "cwd": "/tmp"},
-            base_dir=None,
-        )
-    assert "vibe" in str(e.value)
+def test_a_vibe_cell_yaml_VALIDATES_now_that_the_membrane_has_SHIPPED():
+    """>>> 0.6.2: THE MEMBRANE HAS SHIPPED (swarph-cli 0.41.5 on PyPI), SO A VIBE
+    CELL.YAML VALIDATES AGAIN — flipped WITH the membrane, exactly as 0.6.1's
+    docstring instructed and 0.6.0 failed to do. <<<
+    The full precondition, verified before this release rather than assumed:
+    0.41.5 is on /simple/, it carries `class VibeMembrane`, it declares
+    `swarph-shared>=0.4.0,!=0.6.0,<0.7` (so 0.6.2 satisfies it), and the lab-ovh
+    editable tree that five live cells run off reports unmembraned = []."""
+    cell = parse_cell_dict(
+        {"schema_version": "v1", "name": "vibe-1", "provider": "vibe",
+         "role": "worker", "cwd": "/tmp"},
+        base_dir=None,
+    )
+    assert cell.provider == "vibe"
 
 
 def test_an_UNKNOWN_provider_is_still_refused_and_the_error_NAMES_the_set():
