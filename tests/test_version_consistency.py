@@ -22,4 +22,5 @@ def test_publish_workflow_refuses_tags_outside_main_history():
         encoding="utf-8"
     )
     assert "fetch-depth: 0" in workflow
-    assert 'git merge-base --is-ancestor "$GITHUB_SHA" origin/main' in workflow
+    assert 'git rev-parse "$GITHUB_SHA^{commit}"' in workflow
+    assert 'git merge-base --is-ancestor "$tag_commit" origin/main' in workflow
