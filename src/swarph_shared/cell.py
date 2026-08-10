@@ -71,7 +71,7 @@ from swarph_shared.peer_registry import NAMING_CONVENTION_REGEX as PEER_NAME_RE 
 # THIS PACKAGE CANNOT TEST THE INVARIANT — importing swarph-cli would be
 # circular — so the contract is carried here as text and enforced there as code.
 # That asymmetry is exactly why it must be written down at the WRITE site.
-VALID_PROVIDERS = frozenset({"claude", "codex", "antigravity", "grok", "vibe"})
+VALID_PROVIDERS = frozenset({"claude", "codex", "antigravity", "grok", "vibe", "muse"})
 # >>> `vibe` RE-ADDED IN 0.6.2, THIS TIME IN THE CORRECT ORDER. 0.6.0 added it
 # FIRST and broke `swarph spawn` for every fresh install for ~5h, because
 # swarph-cli's guard is `VALID_PROVIDERS ⊆ MEMBRANES` and no VibeMembrane

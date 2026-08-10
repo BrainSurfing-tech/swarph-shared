@@ -47,7 +47,7 @@ def test_valid_providers_pins_the_set_AND_the_ORDERING_CONTRACT():
     so whoever edits this line must carry it. That is what this docstring is for:
     the test cannot fail on the ordering, only a reader can."""
     assert VALID_PROVIDERS == frozenset(
-        {"claude", "codex", "antigravity", "grok", "vibe"})
+        {"claude", "codex", "antigravity", "grok", "vibe", "muse"})
 
 
 def test_a_vibe_cell_yaml_VALIDATES_now_that_the_membrane_has_SHIPPED():
