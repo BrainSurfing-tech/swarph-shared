@@ -50,6 +50,16 @@ def test_valid_providers_pins_the_set_AND_the_ORDERING_CONTRACT():
         {"claude", "codex", "antigravity", "grok", "vibe"})
 
 
+def test_provider_extensions_are_opt_in_for_the_matching_client_runtime():
+    raw = {"schema_version": "v1", "name": "muse-1", "provider": "muse",
+           "role": "worker", "cwd": "/tmp"}
+    with pytest.raises(CellError, match="provider"):
+        parse_cell_dict(raw)
+
+    cell = parse_cell_dict(raw, allowed_providers=VALID_PROVIDERS | {"muse"})
+    assert cell.provider == "muse"
+
+
 def test_a_vibe_cell_yaml_VALIDATES_now_that_the_membrane_has_SHIPPED():
     """>>> 0.6.2: THE MEMBRANE HAS SHIPPED (swarph-cli 0.41.5 on PyPI), SO A VIBE
     CELL.YAML VALIDATES AGAIN — flipped WITH the membrane, exactly as 0.6.1's

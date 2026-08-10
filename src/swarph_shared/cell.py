@@ -32,7 +32,7 @@ import re
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Collection, Optional
 
 
 SCHEMA_VERSION_V1 = "v1"
@@ -72,6 +72,8 @@ from swarph_shared.peer_registry import NAMING_CONVENTION_REGEX as PEER_NAME_RE 
 # circular — so the contract is carried here as text and enforced there as code.
 # That asymmetry is exactly why it must be written down at the WRITE site.
 VALID_PROVIDERS = frozenset({"claude", "codex", "antigravity", "grok", "vibe"})
+# New providers do not widen this legacy policy. A client with a matching
+# membrane must opt in through parse_cell_dict(allowed_providers=...).
 # >>> `vibe` RE-ADDED IN 0.6.2, THIS TIME IN THE CORRECT ORDER. 0.6.0 added it
 # FIRST and broke `swarph spawn` for every fresh install for ~5h, because
 # swarph-cli's guard is `VALID_PROVIDERS ⊆ MEMBRANES` and no VibeMembrane
@@ -178,6 +180,7 @@ def parse_cell_dict(
     *,
     source: str = "<dict>",
     base_dir: Optional[Path] = None,
+    allowed_providers: Optional[Collection[str]] = None,
 ) -> Cell:
     """Parse + validate a cell.yaml-shaped dict into a Cell instance.
 
@@ -194,6 +197,9 @@ def parse_cell_dict(
         ``cwd`` and ``starter_prompt_path``. swarph-cli passes the
         cell.yaml's parent directory; pass None when no relative-path
         resolution is needed (e.g., when cell came from a URL body).
+      allowed_providers: Explicit provider policy for a caller that ships a
+        matching runtime membrane. Defaults to the legacy global whitelist.
+        Extensions are opt-in so a future provider cannot break older clients.
 
     Raises:
       CellError on any schema violation. swarph-shared raises CellError
@@ -273,10 +279,13 @@ def parse_cell_dict(
         if not starter_path.is_absolute() and base_dir is not None:
             starter_path = (base_dir / starter_path).resolve()
 
-    if provider not in VALID_PROVIDERS:
+    providers = VALID_PROVIDERS if allowed_providers is None else frozenset(allowed_providers)
+    if not providers or not all(isinstance(item, str) and item for item in providers):
+        raise CellError("allowed_providers must be a non-empty collection of provider names")
+    if provider not in providers:
         raise CellError(
             f"cell.yaml: provider {provider!r} is not in the supported "
-            f"provider set (valid: {sorted(VALID_PROVIDERS)}). "
+            f"provider set (valid: {sorted(providers)}). "
             "Unsupported provider spawn is queued for a future release."
         )
 
