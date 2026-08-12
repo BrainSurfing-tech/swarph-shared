@@ -25,6 +25,15 @@ patterns stay consistent across producers:
                           layer. Schema FROZEN at "v1" per drop-mother
                           review #890 (C2) discipline; v0.6 cell.yaml
                           files keep working unchanged in v0.7+.
+  - llm_cost             — one price base (LiteLLM-sourced), one cost
+                          function, for the whole mesh (card #426).
+                          omega_llm and swarph-cli/bench each held a
+                          separate price table; the hand-maintained one
+                          silently lacked Anthropic's 1-hour cache tier and
+                          understated cost by ~60% on that component.
+                          Self-checking: reconcile() compares a computed
+                          cost against claude -p's own reported costUSD for
+                          the same call.
 
 The package is **MIT-licensed** and **pure stdlib** — zero runtime deps. Same
 pattern as phawkes / fisherrao / tailcor / diebold-yilmaz / hodgex
@@ -82,8 +91,20 @@ from swarph_shared.untrusted_repo_preflight import (
     preflight,
     safe_reader_flags,
 )
+from swarph_shared.llm_cost import (
+    CostResult,
+    PriceFetchError,
+    PriceRow,
+    ReconcileResult,
+    TokenUsage,
+    classify_source,
+    compute_cost,
+    fetch_price_base,
+    reconcile,
+    usage_from_claude_p_json,
+)
 
-__version__ = "0.7.0"
+__version__ = "0.8.0"
 
 __all__ = [
     "__version__",
@@ -127,4 +148,15 @@ __all__ = [
     "git_config_is_poisoned",
     "preflight",
     "safe_reader_flags",
+    # llm_cost (v0.8.0 — card #426, one price base + one cost function)
+    "CostResult",
+    "PriceFetchError",
+    "PriceRow",
+    "ReconcileResult",
+    "TokenUsage",
+    "classify_source",
+    "compute_cost",
+    "fetch_price_base",
+    "reconcile",
+    "usage_from_claude_p_json",
 ]
