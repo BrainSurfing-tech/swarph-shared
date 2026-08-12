@@ -173,8 +173,17 @@ def fetch_price_base(*, force_refresh: bool = False) -> dict:
         # Exception: pass` falls through to a live refetch), but a torn write
         # under load is exactly the thundering-herd shape this avoids for free.
         tmp = CACHE_PATH.with_suffix(CACHE_PATH.suffix + f".tmp.{os.getpid()}")
-        tmp.write_text(json.dumps(raw))
-        os.replace(tmp, CACHE_PATH)
+        try:
+            tmp.write_text(json.dumps(raw))
+            os.replace(tmp, CACHE_PATH)
+        finally:
+            # If replace succeeded, tmp no longer exists at this path (renamed
+            # onto CACHE_PATH) and this is a no-op. If write_text or replace
+            # raised (rare: cross-device, permission change mid-run), clean up
+            # the orphan rather than leave a .tmp.<pid> file on disk forever —
+            # review finding, optional/non-blocking (pricing itself degrades
+            # fine either way; this is disk hygiene, not correctness).
+            tmp.unlink(missing_ok=True)
     except OSError:
         pass  # caching is an optimisation; a write failure must not break pricing
     return {k: _row_from_raw(v) for k, v in raw.items() if isinstance(v, dict)}

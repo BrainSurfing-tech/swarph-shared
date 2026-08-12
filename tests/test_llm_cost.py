@@ -334,3 +334,22 @@ def test_fetch_price_base_write_goes_through_tempfile_and_replace(tmp_path, monk
     json.loads(cache_file.read_text())  # the file left behind parses cleanly
     leftover_tmp_files = list(tmp_path.glob("*.tmp.*"))
     assert leftover_tmp_files == []  # os.replace consumed the tempfile, nothing orphaned
+
+
+def test_fetch_price_base_cleans_up_orphan_tempfile_when_replace_fails(tmp_path, monkeypatch):
+    """Reviewer's optional/non-blocking follow-up on finding #3: if
+    os.replace raises AFTER the tempfile is written (rare: cross-device,
+    permission change mid-run), the tempfile must not be left orphaned on
+    disk forever. Forces the failure with a real (non-mocked) OSError from
+    the actual os.replace call, then checks the filesystem directly —
+    not a mock assertion, an actual absence of the .tmp.<pid> file."""
+    cache_file = tmp_path / "prices.json"
+    monkeypatch.setattr("swarph_shared.llm_cost.CACHE_PATH", cache_file)
+    with patch("swarph_shared.llm_cost._fetch_live",
+               return_value={"m": {"input_cost_per_token": 1e-06, "output_cost_per_token": 1e-06}}), \
+         patch("swarph_shared.llm_cost.os.replace", side_effect=OSError("simulated cross-device failure")):
+        base = fetch_price_base(force_refresh=True)  # must not raise: caching is an optimisation
+    assert base["m"].input == 1e-06  # pricing still worked from the in-memory payload
+    assert not cache_file.exists()  # replace never succeeded, so the target was never created
+    leftover_tmp_files = list(tmp_path.glob("*.tmp.*"))
+    assert leftover_tmp_files == [], f"orphaned tempfile(s) left behind: {leftover_tmp_files}"
