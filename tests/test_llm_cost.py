@@ -11,6 +11,7 @@ a permanent regression check with a real vendor cost to compare against.
 from __future__ import annotations
 
 import json
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -114,6 +115,24 @@ def test_reconcile_computed_zero_never_divides_by_zero():
     result = reconcile(TokenUsage(), OPUS_5_RATES, vendor_usd=0.5)
     assert result.agrees is False
     assert result.computed_usd == 0.0
+
+
+def test_reconcile_both_sides_genuinely_zero_agrees():
+    """Review finding #4: a legitimately free call (nothing priced, vendor
+    also reports 0.0) must reconcile as agreeing — the prior version marked
+    EVERY zero-computed call as disagreeing regardless of the vendor figure,
+    which hid the one case where 'no cost' is the correct answer."""
+    result = reconcile(TokenUsage(), OPUS_5_RATES, vendor_usd=0.0)
+    assert result.agrees is True
+    assert result.ratio == 1.0
+
+
+def test_reconcile_zero_computed_nonzero_vendor_still_disagrees():
+    """The real defect finding #4 must not accidentally paper over: zero
+    table-derived cost against a NON-zero vendor figure (missing rates, or
+    usage that should have priced) is a genuine disagreement."""
+    result = reconcile(TokenUsage(), OPUS_5_RATES, vendor_usd=0.5)
+    assert result.agrees is False
 
 
 # ---------------------------------------------------------------------------
@@ -246,3 +265,72 @@ def test_fetch_price_base_raises_only_when_no_fetch_and_no_cache(tmp_path, monke
     with patch("swarph_shared.llm_cost._fetch_live", side_effect=OSError("network down")):
         with pytest.raises(PriceFetchError):
             fetch_price_base(force_refresh=True)
+
+
+def test_fetch_price_base_falls_back_to_stale_cache_on_malformed_200(tmp_path, monkeypatch):
+    """Review finding #1: a live fetch that returns 200 with a non-JSON body
+    (rate-limit HTML page, truncated response) raised json.JSONDecodeError
+    uncaught in the first version, even with a usable stale cache sitting
+    right next to it — contradicting the module's own 'never raises for a
+    transient outage' promise. json.JSONDecodeError IS a ValueError; the
+    except clause now catches it the same way a connection failure is caught."""
+    cache_file = tmp_path / "prices.json"
+    cache_file.write_text(json.dumps({"claude-opus-5": {"input_cost_per_token": 1e-06, "output_cost_per_token": 1e-06}}))
+    monkeypatch.setattr("swarph_shared.llm_cost.CACHE_PATH", cache_file)
+    with patch("swarph_shared.llm_cost._fetch_live", side_effect=json.JSONDecodeError("bad", "doc", 0)):
+        base = fetch_price_base(force_refresh=True)
+    assert "claude-opus-5" in base  # degraded to stale cache, not raised
+
+
+def test_fetch_price_base_serves_a_fresh_cache_without_a_live_fetch(tmp_path, monkeypatch):
+    """Review finding #2: the TTL-hit path (`not force_refresh and CACHE_PATH.exists()
+    and age < CACHE_TTL_SECONDS`) was never exercised — all prior tests forced
+    a refresh, skipping it entirely. This proves a cache written just now is
+    served WITHOUT touching the network at all."""
+    cache_file = tmp_path / "prices.json"
+    cache_file.write_text(json.dumps({"claude-opus-5": {"input_cost_per_token": 9e-06, "output_cost_per_token": 9e-05}}))
+    monkeypatch.setattr("swarph_shared.llm_cost.CACHE_PATH", cache_file)
+    with patch("swarph_shared.llm_cost._fetch_live", side_effect=AssertionError("must not fetch live on a fresh cache")):
+        base = fetch_price_base()  # force_refresh defaults to False
+    assert base["claude-opus-5"].input == 9e-06
+
+
+def test_fetch_price_base_refetches_when_cache_is_expired(tmp_path, monkeypatch):
+    """The other half of finding #2: an expired (past-TTL) cache must NOT be
+    served silently — it must trigger a live refetch through the normal,
+    non-forced call path."""
+    import os as _os
+    cache_file = tmp_path / "prices.json"
+    cache_file.write_text(json.dumps({"claude-opus-5": {"input_cost_per_token": 1e-06, "output_cost_per_token": 1e-06}}))
+    old = time.time() - 999999
+    _os.utime(cache_file, (old, old))
+    monkeypatch.setattr("swarph_shared.llm_cost.CACHE_PATH", cache_file)
+    fresh_payload = {"claude-opus-5": {"input_cost_per_token": 7e-06, "output_cost_per_token": 7e-05}}
+    with patch("swarph_shared.llm_cost._fetch_live", return_value=fresh_payload) as mock_fetch:
+        base = fetch_price_base()  # force_refresh=False, but cache is expired
+    mock_fetch.assert_called_once()
+    assert base["claude-opus-5"].input == 7e-06  # got the FRESH value, not the stale one
+
+
+def test_fetch_price_base_write_goes_through_tempfile_and_replace(tmp_path, monkeypatch):
+    """Review finding #3: the cache write must go through a tempfile +
+    os.replace rather than a direct write_text.
+
+    HONEST ABOUT WHAT THIS PROVES: a single-threaded, non-interrupted test
+    cannot demonstrate atomicity under a crash or a race — that needs fault
+    injection or concurrent threads, disproportionate for a finding the
+    review itself called self-healing/non-blocking. What THIS asserts is
+    that os.replace is actually invoked (not that write_text is used
+    directly) and that no stray tempfile survives a successful run — the
+    mechanism is present, not that it was stress-tested.
+    """
+    cache_file = tmp_path / "prices.json"
+    monkeypatch.setattr("swarph_shared.llm_cost.CACHE_PATH", cache_file)
+    with patch("swarph_shared.llm_cost._fetch_live", return_value={"m": {"input_cost_per_token": 1e-06, "output_cost_per_token": 1e-06}}), \
+         patch("swarph_shared.llm_cost.os.replace", wraps=__import__("os").replace) as mock_replace:
+        fetch_price_base(force_refresh=True)
+    mock_replace.assert_called_once()  # proves the tempfile->replace PATH executed, not just write_text
+    assert cache_file.exists()
+    json.loads(cache_file.read_text())  # the file left behind parses cleanly
+    leftover_tmp_files = list(tmp_path.glob("*.tmp.*"))
+    assert leftover_tmp_files == []  # os.replace consumed the tempfile, nothing orphaned

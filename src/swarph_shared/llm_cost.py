@@ -149,7 +149,13 @@ def fetch_price_base(*, force_refresh: bool = False) -> dict:
 
     try:
         raw = _fetch_live()
-    except (urllib.error.URLError, TimeoutError, OSError):
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+        # ValueError catches json.JSONDecodeError too: a 200 with a malformed
+        # body (rate-limit HTML page, truncated response) is a transient-outage
+        # shape, not a code bug, and must degrade to the stale cache the same
+        # way a connection failure does — a review finding on the first cut,
+        # which caught this contradicting the docstring's own "never raises"
+        # promise.
         if CACHE_PATH.exists():
             try:
                 raw = json.loads(CACHE_PATH.read_text())
@@ -160,7 +166,15 @@ def fetch_price_base(*, force_refresh: bool = False) -> dict:
 
     try:
         CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        CACHE_PATH.write_text(json.dumps(raw))
+        # tempfile -> os.replace, matching this ecosystem's .env write discipline
+        # elsewhere: two concurrent fetch_price_base() calls refreshing at once
+        # must not be able to interleave writes into a corrupt cache file. A
+        # partial write is self-healing today (the next read's broad `except
+        # Exception: pass` falls through to a live refetch), but a torn write
+        # under load is exactly the thundering-herd shape this avoids for free.
+        tmp = CACHE_PATH.with_suffix(CACHE_PATH.suffix + f".tmp.{os.getpid()}")
+        tmp.write_text(json.dumps(raw))
+        os.replace(tmp, CACHE_PATH)
     except OSError:
         pass  # caching is an optimisation; a write failure must not break pricing
     return {k: _row_from_raw(v) for k, v in raw.items() if isinstance(v, dict)}
@@ -211,7 +225,15 @@ def reconcile(usage: TokenUsage, rates: PriceRow, vendor_usd: float, *, toleranc
     """
     computed = compute_cost(usage, rates).cost_usd
     if computed <= 0:
-        return ReconcileResult(computed_usd=computed, vendor_usd=vendor_usd, ratio=float("inf"), agrees=False)
+        # A genuinely free call (both sides legitimately zero) agrees; a zero
+        # table-derived cost against a NON-zero vendor figure is the real
+        # disagreement (missing rates, or usage that should have priced but
+        # didn't) and must still be flagged. Conflating the two — reported as
+        # disagrees=True unconditionally on the review's first pass — hid the
+        # one case where "no cost" is the correct, reconciled answer.
+        agrees = vendor_usd == 0.0
+        return ReconcileResult(computed_usd=computed, vendor_usd=vendor_usd,
+                               ratio=(1.0 if agrees else float("inf")), agrees=agrees)
     ratio = vendor_usd / computed
     return ReconcileResult(computed_usd=computed, vendor_usd=vendor_usd, ratio=ratio, agrees=abs(ratio - 1.0) <= tolerance)
 
