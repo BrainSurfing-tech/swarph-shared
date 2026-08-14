@@ -104,7 +104,7 @@ from swarph_shared.llm_cost import (
     usage_from_claude_p_json,
 )
 
-__version__ = "0.8.0"
+__version__ = "0.8.1"
 
 __all__ = [
     "__version__",

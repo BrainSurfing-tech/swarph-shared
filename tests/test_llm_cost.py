@@ -250,6 +250,37 @@ def test_fetch_price_base_parses_live_payload(tmp_path, monkeypatch):
     assert base["claude-opus-5"].cache_creation_above_1hr == 1e-05
 
 
+def test_fetch_price_base_excludes_entries_missing_a_real_price(tmp_path, monkeypatch):
+    """A row with no input_cost_per_token / output_cost_per_token key (LiteLLM
+    carries these for embedding-only rows, deprecated aliases, mode-only
+    metadata) must not become a 0.0-priced entry — that's indistinguishable
+    downstream from a genuinely free model and silently zeroes real cost.
+    Found integrating #430 in hedge-fund-mcp: fetch_price_base() was handing
+    back priced-at-zero rows for models LiteLLM has no real listing for."""
+    monkeypatch.setattr("swarph_shared.llm_cost.CACHE_PATH", tmp_path / "prices.json")
+    payload = {
+        "claude-opus-5": {
+            "input_cost_per_token": 5e-06,
+            "output_cost_per_token": 2.5e-05,
+        },
+        "embedding-only-model": {
+            "mode": "embedding",
+            # no input_cost_per_token / output_cost_per_token at all
+        },
+        "genuinely-free-model": {
+            "input_cost_per_token": 0.0,
+            "output_cost_per_token": 0.0,
+        },
+    }
+    with patch("swarph_shared.llm_cost._fetch_live", return_value=payload):
+        base = fetch_price_base(force_refresh=True)
+    assert "claude-opus-5" in base
+    assert "embedding-only-model" not in base
+    # a REAL 0.0 (key present, priced free) is not the same bug — must survive
+    assert base["genuinely-free-model"].input == 0.0
+    assert base["genuinely-free-model"].output == 0.0
+
+
 def test_fetch_price_base_falls_back_to_stale_cache_on_network_failure(tmp_path, monkeypatch):
     cache_file = tmp_path / "prices.json"
     cache_file.write_text(json.dumps({"claude-opus-5": {"input_cost_per_token": 1e-06, "output_cost_per_token": 1e-06}}))

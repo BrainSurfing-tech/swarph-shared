@@ -122,14 +122,40 @@ def _fetch_live() -> dict:
         return json.loads(resp.read())
 
 
-def _row_from_raw(raw: dict) -> PriceRow:
+def _row_from_raw(raw: dict) -> Optional[PriceRow]:
+    """None if `raw` lacks a real input or output price. LiteLLM's file carries
+    many non-pricing entries (embedding-only rows, deprecated aliases, mode-only
+    metadata) with the cost keys simply absent. The old `... or 0.0` coercion
+    could not tell that apart from a genuinely free model priced at 0.0 — it
+    turned "price unknown" into "genuinely free" for every downstream
+    compute_cost() call. Found integrating #430 (hedge-fund-mcp, 2026-08-14):
+    the caller had to add its own exclusion after `fetch_price_base()` returned
+    zero-priced entries for models with no real listing. Fixed at the source
+    instead of leaving every consumer to rediscover it.
+    """
+    inp = raw.get("input_cost_per_token")
+    out = raw.get("output_cost_per_token")
+    if inp is None or out is None:
+        return None
     return PriceRow(
-        input=float(raw.get("input_cost_per_token") or 0.0),
-        output=float(raw.get("output_cost_per_token") or 0.0),
+        input=float(inp),
+        output=float(out),
         cache_read=raw.get("cache_read_input_token_cost"),
         cache_creation=raw.get("cache_creation_input_token_cost"),
         cache_creation_above_1hr=raw.get("cache_creation_input_token_cost_above_1hr"),
     )
+
+
+def _rows_from_raw(raw: dict) -> dict:
+    """model_id -> PriceRow, skipping entries `_row_from_raw` can't price."""
+    out = {}
+    for k, v in raw.items():
+        if not isinstance(v, dict):
+            continue
+        row = _row_from_raw(v)
+        if row is not None:
+            out[k] = row
+    return out
 
 
 def fetch_price_base(*, force_refresh: bool = False) -> dict:
@@ -143,7 +169,7 @@ def fetch_price_base(*, force_refresh: bool = False) -> dict:
         if age < CACHE_TTL_SECONDS:
             try:
                 raw = json.loads(CACHE_PATH.read_text())
-                return {k: _row_from_raw(v) for k, v in raw.items() if isinstance(v, dict)}
+                return _rows_from_raw(raw)
             except Exception:
                 pass  # corrupt cache: fall through to a live fetch
 
@@ -159,7 +185,7 @@ def fetch_price_base(*, force_refresh: bool = False) -> dict:
         if CACHE_PATH.exists():
             try:
                 raw = json.loads(CACHE_PATH.read_text())
-                return {k: _row_from_raw(v) for k, v in raw.items() if isinstance(v, dict)}
+                return _rows_from_raw(raw)
             except Exception:
                 pass
         raise PriceFetchError("no live fetch and no usable cache — cannot price anything")
@@ -186,7 +212,7 @@ def fetch_price_base(*, force_refresh: bool = False) -> dict:
             tmp.unlink(missing_ok=True)
     except OSError:
         pass  # caching is an optimisation; a write failure must not break pricing
-    return {k: _row_from_raw(v) for k, v in raw.items() if isinstance(v, dict)}
+    return _rows_from_raw(raw)
 
 
 def compute_cost(usage: TokenUsage, rates: PriceRow) -> CostResult:
