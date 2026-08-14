@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "swarph-shared"
-version = "0.8.0"
-description = "Shared substrate primitives for swarph-mesh ecosystem (caller convention, subprocess env scrubbing, JSON-mode harness, peer-name registry, cell.yaml schema, LLM cost reconciliation). v0.8.0 adds llm_cost: one LiteLLM-sourced price base + one cost function for the whole mesh, self-checking via claude -p's own reported cost per call."
+version = "0.8.1"
+description = "Shared substrate primitives for swarph-mesh ecosystem (caller convention, subprocess env scrubbing, JSON-mode harness, peer-name registry, cell.yaml schema, LLM cost reconciliation). v0.8.0 adds llm_cost: one LiteLLM-sourced price base + one cost function for the whole mesh, self-checking via claude -p's own reported cost per call. v0.8.1 fixes fetch_price_base() silently zero-pricing entries LiteLLM has no real listing for, instead of excluding them."
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"
