@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "swarph-shared"
-version = "0.3.3"
-description = "Shared substrate primitives for swarph-mesh ecosystem (caller convention, subprocess env scrubbing, JSON-mode harness, peer-name registry, cell.yaml schema). v0.3.2 bundles the adversarial-sweep hardening: subprocess_env billing-redirect scrub, string-aware JSON brace extraction, and peer_registry empty-token/malformed-shape/regex-unification fixes."
+version = "0.8.1"
+description = "Shared substrate primitives for swarph-mesh ecosystem (caller convention, subprocess env scrubbing, JSON-mode harness, peer-name registry, cell.yaml schema, LLM cost reconciliation). v0.8.0 adds llm_cost: one LiteLLM-sourced price base + one cost function for the whole mesh, self-checking via claude -p's own reported cost per call. v0.8.1 fixes fetch_price_base() silently zero-pricing entries LiteLLM has no real listing for, instead of excluding them."
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"
@@ -30,8 +30,8 @@ classifiers = [
 dependencies = []
 
 [project.urls]
-Homepage = "https://github.com/darw007d/swarph-shared"
-Source = "https://github.com/darw007d/swarph-shared"
+Homepage = "https://github.com/BrainSurfing-tech/swarph-shared"
+Source = "https://github.com/BrainSurfing-tech/swarph-shared"
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0"]
@@ -41,4 +41,11 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# >>> WITHOUT THIS, `pytest` IMPORTS THE **INSTALLED** swarph_shared AND NOT THE
+# WORKING TREE — a source edit is invisible to the suite and every test passes
+# having exercised the previously-released wheel. MEASURED 2026-08-05 adding
+# `vibe` to VALID_PROVIDERS: the contract test failed against site-packages
+# 0.5.0 while the tree already had the change, and `PYTHONPATH=src` flipped it.
+# A green suite that never loaded your code is the purest false green there is.
+pythonpath = ["src"]
 addopts = "-v --tb=short"

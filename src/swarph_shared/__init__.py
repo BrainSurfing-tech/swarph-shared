@@ -25,6 +25,15 @@ patterns stay consistent across producers:
                           layer. Schema FROZEN at "v1" per drop-mother
                           review #890 (C2) discipline; v0.6 cell.yaml
                           files keep working unchanged in v0.7+.
+  - llm_cost             — one price base (LiteLLM-sourced), one cost
+                          function, for the whole mesh (card #426).
+                          omega_llm and swarph-cli/bench each held a
+                          separate price table; the hand-maintained one
+                          silently lacked Anthropic's 1-hour cache tier and
+                          understated cost by ~60% on that component.
+                          Self-checking: reconcile() compares a computed
+                          cost against claude -p's own reported costUSD for
+                          the same call.
 
 The package is **MIT-licensed** and **pure stdlib** — zero runtime deps. Same
 pattern as phawkes / fisherrao / tailcor / diebold-yilmaz / hodgex
@@ -70,8 +79,32 @@ from swarph_shared.cell import (
     parse_cell_dict,
     validate_uuid_str,
 )
+from swarph_shared.agent_isolation import (
+    PROVIDER_AUTH,
+    build_isolated_env,
+    prepare_isolated_home,
+)
+from swarph_shared.untrusted_repo_preflight import (
+    PreflightError,
+    default_run_git,
+    git_config_is_poisoned,
+    preflight,
+    safe_reader_flags,
+)
+from swarph_shared.llm_cost import (
+    CostResult,
+    PriceFetchError,
+    PriceRow,
+    ReconcileResult,
+    TokenUsage,
+    classify_source,
+    compute_cost,
+    fetch_price_base,
+    reconcile,
+    usage_from_claude_p_json,
+)
 
-__version__ = "0.3.3"
+__version__ = "0.8.1"
 
 __all__ = [
     "__version__",
@@ -82,6 +115,10 @@ __all__ = [
     "FORBIDDEN_KEYS_EXPLICIT",
     "scrub_env_for_subprocess",
     "verify_subscription_setup",
+    # agent_isolation
+    "PROVIDER_AUTH",
+    "build_isolated_env",
+    "prepare_isolated_home",
     # json_mode
     "parse_json",
     "parse_json_with_retry",
@@ -105,4 +142,21 @@ __all__ = [
     "VALID_SCHEMA_VERSIONS",
     "parse_cell_dict",
     "validate_uuid_str",
+    # untrusted_repo_preflight (v0.5.0 — SWAIRM Pattern #3 port; INERT)
+    "PreflightError",
+    "default_run_git",
+    "git_config_is_poisoned",
+    "preflight",
+    "safe_reader_flags",
+    # llm_cost (v0.8.0 — card #426, one price base + one cost function)
+    "CostResult",
+    "PriceFetchError",
+    "PriceRow",
+    "ReconcileResult",
+    "TokenUsage",
+    "classify_source",
+    "compute_cost",
+    "fetch_price_base",
+    "reconcile",
+    "usage_from_claude_p_json",
 ]

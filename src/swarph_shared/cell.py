@@ -32,7 +32,7 @@ import re
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Collection, Optional
 
 
 SCHEMA_VERSION_V1 = "v1"
@@ -58,7 +58,32 @@ from swarph_shared.peer_registry import NAMING_CONVENTION_REGEX as PEER_NAME_RE 
 # additive-optional new providers extend this frozenset without breaking
 # existing imports. Schema_version on Cell carries version semantics;
 # constants don't need redundant version tagging.
-VALID_PROVIDERS = frozenset({"claude", "codex", "antigravity"})
+# >>> ORDERING CONTRACT — READ BEFORE ADDING A PROVIDER HERE. <<<
+# swarph-cli's spawn.py holds `VALID_PROVIDERS ⊆ MEMBRANES` and RAISES AT IMPORT
+# if a name here has no membrane there. So adding a provider to this frozenset
+# BREAKS `swarph spawn` for everyone on the new release until the membrane ships.
+#   MEMBRANE FIRST (harmless — an extra membrane is inert), THEN THIS SET.
+# Measured 2026-08-05: `vibe` was added here first, per board #247's title which
+# said "blocked on swarph-shared adding 'vibe' FIRST". That order is BACKWARDS
+# and spawn.py's own guard comment says so. 0.6.0 shipped it; every fresh
+# `pip install swarph-cli` broke (cli pins only >=0.4.0, no upper bound) for
+# ~5h. Reverted in 0.6.1.
+# THIS PACKAGE CANNOT TEST THE INVARIANT — importing swarph-cli would be
+# circular — so the contract is carried here as text and enforced there as code.
+# That asymmetry is exactly why it must be written down at the WRITE site.
+VALID_PROVIDERS = frozenset({"claude", "codex", "antigravity", "grok", "vibe"})
+# New providers do not widen this legacy policy. A client with a matching
+# membrane must opt in through parse_cell_dict(allowed_providers=...).
+# >>> `vibe` RE-ADDED IN 0.6.2, THIS TIME IN THE CORRECT ORDER. 0.6.0 added it
+# FIRST and broke `swarph spawn` for every fresh install for ~5h, because
+# swarph-cli's guard is `VALID_PROVIDERS ⊆ MEMBRANES` and no VibeMembrane
+# existed. PRECONDITION FOR THIS RELEASE, verified before publishing:
+#   · swarph-cli 0.41.5 is ON PyPI carrying VibeMembrane      (checked /simple/)
+#   · it declares swarph-shared >=0.4.0,!=0.6.0,<0.7          -> 0.6.2 satisfies
+#   · the lab-ovh editable tree (5 live cells) has the membrane -> unmembraned=[]
+# ANYONE STILL ON swarph-cli 0.41.4 (unbounded pin, no membrane) WILL BREAK IF
+# THEY TAKE 0.6.2 WITHOUT UPGRADING THE CLI. The bound in 0.41.5 protects only
+# those who move; it cannot protect a release that predates it. <<<
 
 
 class CellError(ValueError):
@@ -168,6 +193,7 @@ def parse_cell_dict(
     *,
     source: str = "<dict>",
     base_dir: Optional[Path] = None,
+    allowed_providers: Optional[Collection[str]] = None,
 ) -> Cell:
     """Parse + validate a cell.yaml-shaped dict into a Cell instance.
 
@@ -184,6 +210,9 @@ def parse_cell_dict(
         ``cwd`` and ``starter_prompt_path``. swarph-cli passes the
         cell.yaml's parent directory; pass None when no relative-path
         resolution is needed (e.g., when cell came from a URL body).
+      allowed_providers: Explicit provider policy for a caller that ships a
+        matching runtime membrane. Defaults to the legacy global whitelist.
+        Extensions are opt-in so a future provider cannot break older clients.
 
     Raises:
       CellError on any schema violation. swarph-shared raises CellError
@@ -284,10 +313,13 @@ def parse_cell_dict(
         if not starter_path.is_absolute() and base_dir is not None:
             starter_path = (base_dir / starter_path).resolve()
 
-    if provider not in VALID_PROVIDERS:
+    providers = VALID_PROVIDERS if allowed_providers is None else frozenset(allowed_providers)
+    if not providers or not all(isinstance(item, str) and item for item in providers):
+        raise CellError("allowed_providers must be a non-empty collection of provider names")
+    if provider not in providers:
         raise CellError(
             f"cell.yaml: provider {provider!r} is not in the supported "
-            f"provider set (valid: {sorted(VALID_PROVIDERS)}). "
+            f"provider set (valid: {sorted(providers)}). "
             "Unsupported provider spawn is queued for a future release."
         )
 
@@ -358,9 +390,9 @@ def parse_cell_dict(
     # extra.get('cursor_path') / extra.get('tmux_session') keep working
     # alongside the new typed Cell.cursor_path / Cell.tmux_session attributes.
     if cursor_path is not None:
-        raw.setdefault("cursor_path", cursor_path)
+        raw["cursor_path"] = cursor_path
     if tmux_session is not None:
-        raw.setdefault("tmux_session", tmux_session)
+        raw["tmux_session"] = tmux_session
 
     return Cell(
         name=name,

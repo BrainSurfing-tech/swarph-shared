@@ -29,8 +29,72 @@ def test_schema_version_v1_is_only_supported_version():
     assert VALID_SCHEMA_VERSIONS == frozenset({"v1"})
 
 
-def test_valid_providers_include_claude_codex_antigravity():
-    assert VALID_PROVIDERS == frozenset({"claude", "codex", "antigravity"})
+def test_valid_providers_pins_the_set_AND_the_ORDERING_CONTRACT():
+    """Pins the EXACT set, so adding a provider is a deliberate edit rather than
+    a silent widening.
+
+    >>> AND THE EDIT IS NOT SAFE ON ITS OWN. swarph-cli's spawn.py holds
+    `VALID_PROVIDERS ⊆ MEMBRANES` and RAISES AT IMPORT if a name here has no
+    membrane there — so adding a provider BREAKS `swarph spawn` for everyone on
+    the new release until the membrane ships. MEMBRANE FIRST, THEN THIS SET. <<<
+
+    Measured: 0.6.0 added `vibe` here first (board #247's title said "blocked on
+    swarph-shared adding 'vibe' FIRST" — backwards), and every fresh
+    `pip install swarph-cli` broke for ~5h because the CLI pins only >=0.4.0 with
+    no upper bound. Reverted in 0.6.1.
+
+    THIS PACKAGE CANNOT ASSERT THE INVARIANT — importing swarph-cli is circular —
+    so whoever edits this line must carry it. That is what this docstring is for:
+    the test cannot fail on the ordering, only a reader can."""
+    assert VALID_PROVIDERS == frozenset(
+        {"claude", "codex", "antigravity", "grok", "vibe"})
+
+
+def test_provider_extensions_are_opt_in_for_the_matching_client_runtime():
+    raw = {"schema_version": "v1", "name": "muse-1", "provider": "muse",
+           "role": "worker", "cwd": "/tmp"}
+    with pytest.raises(CellError, match="provider"):
+        parse_cell_dict(raw)
+
+    cell = parse_cell_dict(raw, allowed_providers=VALID_PROVIDERS | {"muse"})
+    assert cell.provider == "muse"
+
+
+def test_a_vibe_cell_yaml_VALIDATES_now_that_the_membrane_has_SHIPPED():
+    """>>> 0.6.2: THE MEMBRANE HAS SHIPPED (swarph-cli 0.41.5 on PyPI), SO A VIBE
+    CELL.YAML VALIDATES AGAIN — flipped WITH the membrane, exactly as 0.6.1's
+    docstring instructed and 0.6.0 failed to do. <<<
+    The full precondition, verified before this release rather than assumed:
+    0.41.5 is on /simple/, it carries `class VibeMembrane`, it declares
+    `swarph-shared>=0.4.0,!=0.6.0,<0.7` (so 0.6.2 satisfies it), and the lab-ovh
+    editable tree that five live cells run off reports unmembraned = []."""
+    cell = parse_cell_dict(
+        {"schema_version": "v1", "name": "vibe-1", "provider": "vibe",
+         "role": "worker", "cwd": "/tmp"},
+        base_dir=None,
+    )
+    assert cell.provider == "vibe"
+
+
+def test_an_UNKNOWN_provider_is_still_refused_and_the_error_NAMES_the_set():
+    """The negative leg. Without it, `validate` could have been changed to accept
+    anything and both tests above would still pass."""
+    import pytest
+    with pytest.raises(CellError) as e:
+        parse_cell_dict(
+            {"schema_version": "v1", "name": "vibe-neg", "provider": "not-a-provider",
+             "role": "worker", "cwd": "/tmp"},
+            base_dir=None,
+        )
+    # >>> ASSERT AGAINST A MEMBER OF THE SET, NOT A HARDCODED NAME. The first
+    # version checked for "vibe" — which passed while vibe was supported and
+    # broke the moment it was reverted, testing the ROSTER instead of the
+    # PROPERTY. The property is: the refusal lists what IS supported. <<<
+    msg = str(e.value)
+    for supported in sorted(VALID_PROVIDERS):
+        assert supported in msg, (
+            f"the refusal omits the supported provider {supported!r}, so a caller "
+            f"cannot learn the rule from it: {msg}")
 
 
 def test_peer_name_re_accepts_kebab():
@@ -386,6 +450,8 @@ def test_f4_top_level_pin_wins_over_nested_extra():
         }
     )
     assert cell.cursor_path == "/top.json"
+    # Back-compat: extra dict must also reflect the winning (top-level) value.
+    assert cell.extra.get("cursor_path") == "/top.json"
 
 
 def test_f4_non_string_pin_raises_cellerror():
