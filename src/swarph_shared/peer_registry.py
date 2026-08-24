@@ -93,7 +93,11 @@ KNOWN_ALIASES: dict[str, str] = {
 # Configuration
 # ---------------------------------------------------------------------------
 
-DEFAULT_GATEWAY_URL = os.getenv("MESH_GATEWAY_URL", "http://localhost:8788")
+# TAILNET IP, NOT localhost (card #548; commander 2026-08-21). The mesh-gateway
+# binds HOST=100.107.222.72 ONLY — localhost has never been bound, so this
+# fallback failed as a bare "Connection refused" with no cause named.
+# MESH_GATEWAY_URL remains the escape hatch for anyone outside this mesh.
+DEFAULT_GATEWAY_URL = os.getenv("MESH_GATEWAY_URL", "http://100.107.222.72:8788")
 GATEWAY_TOKEN_ENV = "MESH_GATEWAY_TOKEN"
 
 #: Maximum age (seconds) of a stale cached canonical-names set that
@@ -227,7 +231,8 @@ def canonical_names(
         Maximum age of a cached result before re-querying. ``0`` forces
         a fresh fetch on every call (test fixtures use this).
     gateway_url:
-        Override the default ``MESH_GATEWAY_URL`` env / ``localhost:8788``.
+        Override the default ``MESH_GATEWAY_URL`` env / tailnet IP
+        (``http://100.107.222.72:8788`` — the gateway binds no loopback, #548).
     token:
         Override the default ``MESH_GATEWAY_TOKEN`` env.
     timeout_seconds:
