@@ -8,6 +8,7 @@ wrong on this fleet, harmless anywhere.
 
 from __future__ import annotations
 
+import os
 import re
 import time
 from pathlib import Path
@@ -67,25 +68,41 @@ def test_loopback_is_deliberately_allowed(tmp_path: Path) -> None:
 
 
 def test_the_shipped_default_is_EMPTY() -> None:
-    """The property, read from SOURCE — cannot be disarmed and has no side effects.
+    """The property, observed in a SUBPROCESS with the env removed.
 
-    Two earlier attempts were wrong in instructive ways:
-      1. monkeypatching DEFAULT_GATEWAY_URL to "" and asserting the refusal SET
-         THE VERY THING IT OBSERVED — can-fail proved it vacuous: re-introducing
-         `http://sneaky.example:8788` left every test green.
-      2. importlib.reload() with the env unset DID observe the real value, but
-         replaced the module object and broke 6 unrelated tests holding the old
-         one.
+    THREE EARLIER ATTEMPTS WERE EACH DISARMABLE, and the third was only caught by
+    a reviewer (drop-on-meta-edge, seat-A, 17 variants on sys3):
 
-    Reading the assignment out of the source has neither problem.
+      1. monkeypatch DEFAULT_GATEWAY_URL to "" then assert the refusal — SET THE
+         VERY THING IT OBSERVED. Vacuous: re-introducing a literal left all green.
+      2. importlib.reload() — observed the real value but replaced the module
+         object and broke 6 unrelated tests.
+      3. regex over the source for the os.getenv default argument — reads ONE
+         argument, so it is blind to anything appended after it. Proven by drop:
+             DEFAULT_GATEWAY_URL = os.getenv(..., "").strip() or "http://lab-ovh-1:8788"
+         leaves this file 6/6 GREEN. A second assignment on the next line does too.
+
+    A subprocess reads the value the package ACTUALLY SHIPS, whatever syntax
+    produces it — or-append, second assignment, computed, or plain literal.
     """
-    src = (SRC / "peer_registry.py").read_text(encoding="utf-8")
-    m = re.search(r"^DEFAULT_GATEWAY_URL\s*=\s*os\.getenv\(\s*[\"']MESH_GATEWAY_URL[\"']\s*,\s*([^)]*)\)",
-                  src, re.M)
-    assert m, "DEFAULT_GATEWAY_URL is no longer an os.getenv with a default — re-read this guard"
-    fallback = m.group(1).strip().rstrip(".strip()").strip()
-    assert fallback in ('""', "''"), (
-        f"swarph-shared ships a gateway host default: {fallback} (#578/#579). "
+    import subprocess
+    import sys
+
+    # PYTHONPATH pins the probe to THIS tree. Without it the subprocess imports
+    # the INSTALLED swarph_shared and reports its default instead — which on this
+    # box still reads "http://localhost:8788" from before #548, so the guard would
+    # fail against a package it is not testing. Version is not a location.
+    env = {k: v for k, v in os.environ.items() if k != "MESH_GATEWAY_URL"}
+    env["PYTHONPATH"] = str(SRC.parent)
+    out = subprocess.run(
+        [sys.executable, "-c",
+         "from swarph_shared import peer_registry as p; print(repr(p.DEFAULT_GATEWAY_URL))"],
+        capture_output=True, text=True, env=env,
+    )
+    assert out.returncode == 0, f"probe failed: {out.stderr[-400:]}"
+    shipped = out.stdout.strip()
+    assert shipped in ("''", '""'), (
+        f"swarph-shared ships a gateway host default: {shipped} (#578/#579). "
         "A default that names a machine has that machine's lifetime."
     )
 
