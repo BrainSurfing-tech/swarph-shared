@@ -66,6 +66,30 @@ def test_loopback_is_deliberately_allowed(tmp_path: Path) -> None:
     assert not _sweep(tmp_path)
 
 
+def test_the_shipped_default_is_EMPTY() -> None:
+    """The property, read from SOURCE — cannot be disarmed and has no side effects.
+
+    Two earlier attempts were wrong in instructive ways:
+      1. monkeypatching DEFAULT_GATEWAY_URL to "" and asserting the refusal SET
+         THE VERY THING IT OBSERVED — can-fail proved it vacuous: re-introducing
+         `http://sneaky.example:8788` left every test green.
+      2. importlib.reload() with the env unset DID observe the real value, but
+         replaced the module object and broke 6 unrelated tests holding the old
+         one.
+
+    Reading the assignment out of the source has neither problem.
+    """
+    src = (SRC / "peer_registry.py").read_text(encoding="utf-8")
+    m = re.search(r"^DEFAULT_GATEWAY_URL\s*=\s*os\.getenv\(\s*[\"']MESH_GATEWAY_URL[\"']\s*,\s*([^)]*)\)",
+                  src, re.M)
+    assert m, "DEFAULT_GATEWAY_URL is no longer an os.getenv with a default — re-read this guard"
+    fallback = m.group(1).strip().rstrip(".strip()").strip()
+    assert fallback in ('""', "''"), (
+        f"swarph-shared ships a gateway host default: {fallback} (#578/#579). "
+        "A default that names a machine has that machine's lifetime."
+    )
+
+
 def test_unset_gateway_raises_the_SAME_error_as_an_unreachable_one(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
