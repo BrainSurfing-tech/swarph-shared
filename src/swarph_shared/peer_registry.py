@@ -93,11 +93,17 @@ KNOWN_ALIASES: dict[str, str] = {
 # Configuration
 # ---------------------------------------------------------------------------
 
-# TAILNET IP, NOT localhost (card #548; commander 2026-08-21). The mesh-gateway
-# binds HOST=100.107.222.72 ONLY — localhost has never been bound, so this
-# fallback failed as a bare "Connection refused" with no cause named.
-# MESH_GATEWAY_URL remains the escape hatch for anyone outside this mesh.
-DEFAULT_GATEWAY_URL = os.getenv("MESH_GATEWAY_URL", "http://100.107.222.72:8788")
+# NO HOST DEFAULT (cards #578 / #579, 2026-08-25).
+#
+# #548 replaced a localhost fallback with a tailnet IP for a correct reason — the
+# mesh-gateway never bound loopback. That box was decommissioned 2026-08-25 and
+# the literal became an address that answers nothing, in every installed copy of
+# this package. A default that names a machine has that machine's lifetime.
+#
+# Empty when unset. `canonical_names` is deliberately fail-soft, so an unset
+# gateway takes the SAME loud-degradation path as an unreachable one rather than
+# raising a different way — see the GatewayUnreachableError branch below.
+DEFAULT_GATEWAY_URL = os.getenv("MESH_GATEWAY_URL", "").strip()
 GATEWAY_TOKEN_ENV = "MESH_GATEWAY_TOKEN"
 
 #: Maximum age (seconds) of a stale cached canonical-names set that
@@ -232,7 +238,7 @@ def canonical_names(
         a fresh fetch on every call (test fixtures use this).
     gateway_url:
         Override the default ``MESH_GATEWAY_URL`` env / tailnet IP
-        (``http://100.107.222.72:8788`` — the gateway binds no loopback, #548).
+        (no default ships — set MESH_GATEWAY_URL or pass gateway_url; #578/#579).
     token:
         Override the default ``MESH_GATEWAY_TOKEN`` env.
     timeout_seconds:
@@ -266,7 +272,29 @@ def canonical_names(
     ):
         return _cache["names"]
 
-    gw = gateway_url or DEFAULT_GATEWAY_URL
+    gw = (gateway_url or DEFAULT_GATEWAY_URL or "").strip()
+    if not gw:
+        # #578/#579: no host ships. Degrade exactly as an unreachable gateway
+        # does — stale cache inside the grace window, else the same loud error —
+        # so "unconfigured" and "unreachable" are not two different shapes to a
+        # caller that already handles one of them.
+        if (
+            _cache["names"] is not None
+            and (now - _cache["fetched_at"]) < CACHE_GRACE_SECONDS
+        ):
+            logger.warning(
+                "peer_registry: MESH_GATEWAY_URL is not set and no gateway host "
+                "ships as a default (#578); using stale canonical_names from "
+                "%.0fs ago",
+                now - _cache["fetched_at"],
+            )
+            return _cache["names"]
+        raise GatewayUnreachableError(
+            "MESH_GATEWAY_URL is not set and swarph-shared ships no default "
+            "gateway host. A baked-in address expires the day that box is "
+            "retired (#578/#579; it happened 2026-08-25). "
+            "Set MESH_GATEWAY_URL=http://<host>:<port> or pass gateway_url=..."
+        )
     # Normalize empty/whitespace token to None BEFORE the env fallback. A
     # caller passing token="" (an unset-but-present config key) previously
     # short-circuited the env lookup (``token is not None``) and then sent the
