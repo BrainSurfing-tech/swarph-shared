@@ -107,6 +107,51 @@ def test_the_shipped_default_is_EMPTY() -> None:
     )
 
 
+def test_import_time_capture_does_not_outlive_an_env_unset() -> None:
+    """#632 — THE guard for the import-time capture defect.
+
+    gpt-ops's repro (DM #29321): import peer_registry WITH MESH_GATEWAY_URL
+    set, unset it, then call canonical_names(ttl=0) cold. The import-time
+    assignment keeps dialling the CAPTURED value; the call must instead
+    fail soft with GatewayUnreachableError naming MESH_GATEWAY_URL.
+
+    Runs in a SUBPROCESS with NOTHING patched: the two behavioural tests
+    below pin `DEFAULT_GATEWAY_URL` — the very symbol whose staleness is
+    the defect — so they are green against it BY CONSTRUCTION and are NOT
+    the guard for it. A test that patches the symbol under test cannot
+    fail on it. This one observes the package as shipped: env at import,
+    env removed, call.
+    """
+    import subprocess
+    import sys
+    import textwrap
+
+    env = dict(os.environ)
+    env["MESH_GATEWAY_URL"] = "http://gateway.invalid:8788"  # set AT IMPORT
+    env["PYTHONPATH"] = str(SRC.parent)
+    code = textwrap.dedent(
+        """
+        import os
+        from swarph_shared import peer_registry as p
+        os.environ.pop("MESH_GATEWAY_URL")  # unset AFTER import
+        try:
+            p.canonical_names(ttl_seconds=0)
+        except p.GatewayUnreachableError as e:
+            print("RAISED:", str(e)[:300])
+        else:
+            print("NO-RAISE")
+        """
+    )
+    out = subprocess.run([sys.executable, "-c", code],
+                         capture_output=True, text=True, env=env, timeout=60)
+    assert out.returncode == 0, f"probe failed: {out.stderr[-400:]}"
+    assert "MESH_GATEWAY_URL is not set" in out.stdout, (
+        "unset-after-import must read the CALL-TIME env and take the "
+        "fail-soft 'not set' path; instead the call used the import-time "
+        f"capture. probe said: {out.stdout.strip()[:300]}"
+    )
+
+
 def test_unset_gateway_raises_the_SAME_error_as_an_unreachable_one(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

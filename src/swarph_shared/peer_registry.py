@@ -103,8 +103,27 @@ KNOWN_ALIASES: dict[str, str] = {
 # Empty when unset. `canonical_names` is deliberately fail-soft, so an unset
 # gateway takes the SAME loud-degradation path as an unreachable one rather than
 # raising a different way — see the GatewayUnreachableError branch below.
+#
+# #632: this module-level snapshot is a COMPAT ARTIFACT, not a configuration
+# source. It is resolved once at import, so it outlives every later correction
+# to the env (gpt-ops's #603 shape, one layer down). `canonical_names` does NOT
+# read it — it resolves at call time via _default_gateway_url() below. The
+# symbol stays because the patch-based suite and the shipped-default probe
+# (tests/test_579...) observe it; those tests pin the symbol and are therefore
+# not the guard for its staleness — the subprocess guard is.
 DEFAULT_GATEWAY_URL = os.getenv("MESH_GATEWAY_URL", "").strip()
 GATEWAY_TOKEN_ENV = "MESH_GATEWAY_TOKEN"
+
+
+def _default_gateway_url() -> str:
+    """Resolve MESH_GATEWAY_URL AT CALL TIME (#632).
+
+    An env value captured at import is correct at import and silently wrong
+    afterwards; the only honest read of process configuration is at the
+    moment of use. Empty string when unset — the fail-soft path below turns
+    that into the same GatewayUnreachableError an unreachable host gets.
+    """
+    return os.getenv("MESH_GATEWAY_URL", "").strip()
 
 #: Maximum age (seconds) of a stale cached canonical-names set that
 #: ``canonical_names`` will return when the gateway is unreachable. One
@@ -272,7 +291,7 @@ def canonical_names(
     ):
         return _cache["names"]
 
-    gw = (gateway_url or DEFAULT_GATEWAY_URL or "").strip()
+    gw = (gateway_url or _default_gateway_url() or "").strip()
     if not gw:
         # #578/#579: no host ships. Degrade exactly as an unreachable gateway
         # does — stale cache inside the grace window, else the same loud error —
