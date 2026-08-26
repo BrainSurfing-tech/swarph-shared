@@ -164,7 +164,6 @@ def test_unset_gateway_raises_the_SAME_error_as_an_unreachable_one(
     from swarph_shared import peer_registry as pr
 
     monkeypatch.delenv("MESH_GATEWAY_URL", raising=False)
-    monkeypatch.setattr(pr, "DEFAULT_GATEWAY_URL", "")
     monkeypatch.setattr(pr, "_cache", {"names": None, "fetched_at": 0.0})
     with pytest.raises(pr.GatewayUnreachableError, match="MESH_GATEWAY_URL is not set"):
         pr.canonical_names(ttl_seconds=0)
@@ -175,6 +174,5 @@ def test_unset_gateway_still_serves_a_warm_cache(monkeypatch: pytest.MonkeyPatch
     from swarph_shared import peer_registry as pr
 
     monkeypatch.delenv("MESH_GATEWAY_URL", raising=False)
-    monkeypatch.setattr(pr, "DEFAULT_GATEWAY_URL", "")
     monkeypatch.setattr(pr, "_cache", {"names": {"lab-ovh"}, "fetched_at": time.time()})
     assert pr.canonical_names(ttl_seconds=0) == {"lab-ovh"}
