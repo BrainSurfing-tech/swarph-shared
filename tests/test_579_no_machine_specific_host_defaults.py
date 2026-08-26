@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import re
+import stat
 import subprocess
 import time
 from pathlib import Path
@@ -32,9 +33,9 @@ _TEXT_SUFFIXES = {".py", ".md", ".default", ".service", ".timer", ".sh", ".toml"
 
 
 def _sweep(root: Path) -> tuple[list[str], list[str]]:
-    """Offender lines under `root`, plus the files the sweep could NOT read.
+    """Offender lines under `root`, plus the paths the sweep could NOT cover.
 
-    Two channels, because a sweep that cannot read a file must SAY so or it
+    Two channels, because a sweep that cannot cover a path must SAY so or it
     asserts coverage it did not perform:
 
       - Decoding is NOT a read failure. errors="replace" keeps the line
@@ -43,26 +44,42 @@ def _sweep(root: Path) -> tuple[list[str], list[str]]:
         `except UnicodeDecodeError: continue`) silently dropped any non-UTF-8
         file — drop-on-meta-edge's Required 3 on PR #24, verified live by
         lab-ovh with a real cp1252 probe. swarph-cli #318 is the reference.
-      - An OSError (permissions, locking) IS a read failure: the content is
-        UNKNOWN, so the file is named in `unreadable` — mesh-gateway #633's
-        coverage channel, ported here.
+      - An OSError READING a file (permissions, locking) IS a coverage
+        failure: the content is UNKNOWN, so the file is named in
+        `unreadable` — mesh-gateway #633's coverage channel, ported here.
+      - So is an OSError TRAVERSING or STAT-ing, and the stdlib hides both
+        by default: pathlib's rglob suppresses scandir errors (a denied
+        subtree vanishes) and Path.is_file() swallows OSError into False
+        (an unstat-able file vanishes). gpt-ops's P2 on the merged sweep.
+        os.walk's onerror names the directory that could not be entered,
+        and an explicit os.stat names the file whose metadata could not be
+        read — every eligible path is either scanned or named.
     """
     offenders: list[str] = []
     unreadable: list[str] = []
-    for path in root.rglob("*"):
-        if not path.is_file() or path.suffix not in _TEXT_SUFFIXES:
-            continue
-        if "__pycache__" in path.parts:
-            continue
-        try:
-            text = path.read_text(encoding="utf-8", errors="replace")
-        except OSError as exc:
-            unreadable.append(f"{path.name}: {exc.__class__.__name__}: {exc}")
-            continue
-        for lineno, line in enumerate(text.splitlines(), 1):
-            found = _MACHINE_SPECIFIC.search(line)
-            if found:
-                offenders.append(f"{path.name}:{lineno}: {found.group(0)}  |  {line.strip()[:90]}")
+
+    def _walk_error(exc: OSError) -> None:
+        unreadable.append(
+            f"{exc.filename or '?'}: walk: {exc.__class__.__name__}: {exc}"
+        )
+
+    for dirpath, dirnames, filenames in os.walk(root, onerror=_walk_error):
+        dirnames[:] = [d for d in dirnames if d != "__pycache__"]
+        for name in filenames:
+            path = Path(dirpath) / name
+            if path.suffix not in _TEXT_SUFFIXES:
+                continue
+            try:
+                if not stat.S_ISREG(os.stat(path).st_mode):
+                    continue  # fifo/socket/device: not sweepable content
+                text = path.read_text(encoding="utf-8", errors="replace")
+            except OSError as exc:
+                unreadable.append(f"{path.name}: {exc.__class__.__name__}: {exc}")
+                continue
+            for lineno, line in enumerate(text.splitlines(), 1):
+                found = _MACHINE_SPECIFIC.search(line)
+                if found:
+                    offenders.append(f"{path.name}:{lineno}: {found.group(0)}  |  {line.strip()[:90]}")
     return offenders, unreadable
 
 
@@ -141,6 +158,75 @@ def test_an_unreadable_file_is_NAMED_not_dropped(tmp_path: Path) -> None:
         # Deletion does not require read permission, and tmp_path cleanup
         # handles the rest — no ACL restore needed.
         target.unlink(missing_ok=True)
+
+
+def test_a_read_failure_is_NAMED_on_every_runner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DETERMINISTIC twin of the chmod test above (gpt-ops's P2 on the merged
+    sweep): the chmod proof SKIPS where the runner is privileged, so on those
+    runners the reporting behaviour is unproven. The injected OSError fires
+    everywhere. This pins the read arm the merged sweep already had."""
+    target = tmp_path / "unreadable.py"
+    target.write_text('X = "http://100.64.189.91:8788"\n')
+    real_read = Path.read_text
+
+    def _read_bomb(self, *a, **kw):
+        if self.name == "unreadable.py":
+            raise OSError("injected read failure")
+        return real_read(self, *a, **kw)
+
+    monkeypatch.setattr(Path, "read_text", _read_bomb)
+    offenders, unreadable = _sweep(tmp_path)
+    assert not offenders, "unreadable content must not leak into the offender channel"
+    assert any("unreadable.py" in u for u in unreadable), unreadable
+
+
+def test_a_stat_failure_is_NAMED_not_dropped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """INJECTED metadata failure: a file whose STAT fails must enter the
+    coverage channel. Path.is_file() swallows OSError into False — under the
+    rglob+is_file form this file was neither scanned nor named: absent
+    rendering as good, one layer down. Deterministic on every runner."""
+    target = tmp_path / "ghost.py"
+    target.write_text('X = "http://100.64.189.91:8788"\n')
+    real_stat = os.stat
+
+    def _stat_bomb(p, *a, **kw):
+        if str(p).endswith("ghost.py"):
+            raise OSError("injected stat failure")
+        return real_stat(p, *a, **kw)
+
+    monkeypatch.setattr(os, "stat", _stat_bomb)
+    offenders, unreadable = _sweep(tmp_path)
+    assert not offenders, "unstat-able content must not leak into the offender channel"
+    assert any("ghost.py" in u for u in unreadable), unreadable
+
+
+def test_a_traversal_failure_is_NAMED_not_dropped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """INJECTED scandir failure: a directory the sweep cannot ENTER may hold
+    eligible files, so the coverage claim is false unless the failure is
+    named. pathlib's rglob suppresses scandir OSError (3.13+): the whole
+    subtree vanished silently. Deterministic on every runner."""
+    sub = tmp_path / "denied"
+    sub.mkdir()
+    (sub / "hidden.py").write_text('X = "http://100.64.189.91:8788"\n')
+    real_scandir = os.scandir
+
+    def _scandir_bomb(p):
+        # pathlib's rglob passes directory paths with a trailing separator.
+        # The 3-arg form sets .filename, as real scandir failures carry it.
+        if str(p).rstrip("/\\").endswith("denied"):
+            raise PermissionError(13, "injected traversal failure", str(p))
+        return real_scandir(p)
+
+    monkeypatch.setattr(os, "scandir", _scandir_bomb)
+    offenders, unreadable = _sweep(tmp_path)
+    assert not offenders, "an unentered subtree must not leak into the offender channel"
+    assert any("denied" in u for u in unreadable), unreadable
 
 
 def test_the_shipped_default_is_EMPTY() -> None:
