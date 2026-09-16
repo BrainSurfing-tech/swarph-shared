@@ -49,6 +49,7 @@ from swarph_shared.caller_convention import (
     validate_caller,
 )
 from swarph_shared.subprocess_env import (
+    ALLOWED_KEYS_EXPLICIT,
     FORBIDDEN_KEYS_EXPLICIT,
     scrub_env_for_subprocess,
     verify_subscription_setup,
@@ -112,6 +113,7 @@ __all__ = [
     "CALLER_PATTERN",
     "validate_caller",
     # subprocess_env
+    "ALLOWED_KEYS_EXPLICIT",
     "FORBIDDEN_KEYS_EXPLICIT",
     "scrub_env_for_subprocess",
     "verify_subscription_setup",

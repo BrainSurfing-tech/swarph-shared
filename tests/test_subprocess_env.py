@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from swarph_shared import (
+    ALLOWED_KEYS_EXPLICIT,
     FORBIDDEN_KEYS_EXPLICIT,
     scrub_env_for_subprocess,
     verify_subscription_setup,
@@ -122,3 +123,56 @@ def test_verify_subscription_setup_restores_env_on_pass(tmp_path, monkeypatch):
     verify_subscription_setup(claude_bin=str(fake_bin), creds_path=creds)
     # Env restored after the test-injection inside verify
     assert os.environ.get("ANTHROPIC_API_KEY") == "sk-ant-PRE-EXISTING"
+
+
+# --- ALLOWED_KEYS_EXPLICIT: the deliberate hole in the suffix sweep (#656/#424) ---
+
+
+def test_exempt_slm_key_survives_the_suffix_sweep(monkeypatch):
+    """SWARPH_SLM_API_KEY ends in _API_KEY but must reach the subprocess.
+
+    If the exemption is removed this reads "not in env" — the silent-failure
+    mode the exemption exists to prevent (available() True off an
+    unauthenticated /v1/models, then every generate() 401s into zero proposals).
+    """
+    monkeypatch.setenv("SWARPH_SLM_API_KEY", "slm-FAKE-FOR-TEST")
+    env = scrub_env_for_subprocess()
+    assert env.get("SWARPH_SLM_API_KEY") == "slm-FAKE-FOR-TEST"
+
+
+def test_exemption_is_exact_not_a_prefix_hole(monkeypatch):
+    """The hole is ONE key, not the SWARPH_ namespace.
+
+    A sibling swarph-named key with the same shape is still scrubbed — this is
+    what fails if someone widens the exemption to a prefix or a pattern.
+    """
+    monkeypatch.setenv("SWARPH_OTHER_API_KEY", "should-not-survive")
+    monkeypatch.setenv("SWARPH_SLM_AUTH_TOKEN", "should-not-survive")
+    env = scrub_env_for_subprocess()
+    assert "SWARPH_OTHER_API_KEY" not in env
+    assert "SWARPH_SLM_AUTH_TOKEN" not in env
+
+
+def test_exemption_can_never_re_admit_a_named_billing_key():
+    """Structural guard on the SET, not on one call.
+
+    Adding e.g. ANTHROPIC_API_KEY to ALLOWED_KEYS_EXPLICIT would flip billing
+    silently and every behavioural test above would still pass, because they
+    each assert on their own key. This is the only check that sees the overlap.
+    """
+    assert not (ALLOWED_KEYS_EXPLICIT & FORBIDDEN_KEYS_EXPLICIT), (
+        "an exemption naming a known billing key re-opens the billing flip"
+    )
+
+
+def test_slm_siblings_are_not_billing_shaped(monkeypatch):
+    """ENDPOINT / MODEL / TIMEOUT carry no credential and must pass through.
+
+    Pinned so a future suffix added to FORBIDDEN_SUFFIXES cannot strip the
+    config half of the SLM client and leave only the key.
+    """
+    for name in ("SWARPH_SLM_ENDPOINT", "SWARPH_SLM_MODEL", "SWARPH_SLM_TIMEOUT"):
+        monkeypatch.setenv(name, "x")
+    env = scrub_env_for_subprocess()
+    for name in ("SWARPH_SLM_ENDPOINT", "SWARPH_SLM_MODEL", "SWARPH_SLM_TIMEOUT"):
+        assert name in env, name

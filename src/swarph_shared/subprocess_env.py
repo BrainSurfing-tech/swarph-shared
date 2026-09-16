@@ -21,9 +21,14 @@ prevention but would break the moment `claude -p` (or any other subprocess)
 needed an env var we didn't anticipate (PYTHONPATH, NPM_CONFIG_*, locale
 vars, etc.). For the BILLING use case, denylist is correct.
 
-The audit memory: anything ending in ``_API_KEY`` is force-popped; the
+Denylist composition has ONE deliberate hole: ``ALLOWED_KEYS_EXPLICIT``
+(see the block beside it) re-admits keys that match a forbidden suffix but
+are swarph-internal rather than provider credentials. Exemption wins.
+
+The audit memory: anything ending in ``_API_KEY`` is force-popped UNLESS
+explicitly exempted; the
 explicit set catches keys that don't end in `_API_KEY` but ARE billing-
-relevant. Denylist composition: explicit_set ∪ `*_API_KEY` suffix.
+relevant. Composition: (explicit_set ∪ suffix_sweep) MINUS ALLOWED_KEYS_EXPLICIT.
 
 Reference for the rule + audit lineage:
 - CLAUDE.md "Critical operational rules" — "Lab-side daemons run
@@ -69,6 +74,30 @@ FORBIDDEN_KEYS_EXPLICIT = frozenset({
     "VERTEX_LOCATION",
 })
 
+# ---------------------------------------------------------------------------
+# EXEMPTIONS — keys that MATCH a forbidden suffix but must still be inherited.
+#
+# The denylist is a shape rule, so it cannot tell a PROVIDER credential from a
+# swarph-internal one that happens to share the shape. Every entry here is a
+# deliberate hole in the billing scrub and must name WHY the billing risk is
+# accepted. Exemption wins over both the explicit set and the suffix sweep.
+#
+# SWARPH_SLM_API_KEY (#656/#424, 2026-09-16): the dreaming SLM client's key.
+#   It names swarph's OWN small-language-model endpoint (SWARPH_SLM_ENDPOINT,
+#   #578 — no host default), whose intended target is a local Ollama that needs
+#   no key at all. Without this exemption a cell-hosted enrich fails SILENTLY
+#   against any hosted OpenAI-compatible target: available() can read True off
+#   an unauthenticated /v1/models, then every generate() 401s into the
+#   per-session except and the run reports ZERO PROPOSALS rather than an error.
+#   ACCEPTED RISK, stated plainly: if an operator points SWARPH_SLM_ENDPOINT at
+#   a METERED provider, this key now reaches every spawned cell and that spend
+#   is real. The endpoint is the thing that decides whether it costs money, and
+#   the endpoint is operator-chosen. This exemption trades a silent failure for
+#   a visible, operator-owned billing decision.
+ALLOWED_KEYS_EXPLICIT = frozenset({
+    "SWARPH_SLM_API_KEY",
+})
+
 # Suffix sweep beside the explicit set — catches provider-namespaced variants
 # of the same billing/auth-redirect shapes (e.g. <X>_AUTH_TOKEN, <X>_BASE_URL).
 FORBIDDEN_SUFFIXES = ("_API_KEY", "_AUTH_TOKEN", "_BASE_URL")
@@ -97,7 +126,8 @@ def scrub_env_for_subprocess() -> dict:
     return {
         k: v
         for k, v in os.environ.items()
-        if k not in FORBIDDEN_KEYS_EXPLICIT and not k.endswith(FORBIDDEN_SUFFIXES)
+        if k in ALLOWED_KEYS_EXPLICIT
+        or (k not in FORBIDDEN_KEYS_EXPLICIT and not k.endswith(FORBIDDEN_SUFFIXES))
     }
 
 
