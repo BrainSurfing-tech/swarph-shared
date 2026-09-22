@@ -145,9 +145,50 @@ def test_link_auth_REFUSES_when_the_real_file_is_NEWER(tmp_path):
     _claude_cred(target, access="older", expires=1000)
     with pytest.raises(ai.CredentialConflict) as exc:
         ai._link_auth(link, target, "claude")
-    assert str(link) in str(exc.value) and str(target) in str(exc.value), "both paths named"
     assert not link.is_symlink(), "the newer credential is left exactly where it is"
     assert json.loads(link.read_text())["claudeAiOauth"]["accessToken"] == "refreshed-in-the-drone"
+    # str(exc) reaches an HTTP 502 body via swarph_cli service/app.py, so it must
+    # carry NO paths; the paths ride on attributes for the caller to log.
+    assert str(link) not in str(exc.value) and str(target) not in str(exc.value), (
+        "str(CredentialConflict) is put in an HTTP response body — no absolute paths")
+    assert exc.value.link == link and exc.value.target == target
+    assert str(link) in exc.value.detail and str(target) in exc.value.detail
+
+
+def test_link_auth_REFUSES_when_the_OPERATOR_credential_is_the_broken_one(tmp_path, capsys):
+    """#923's failure mode mirrored: blaming a rename for an operator-side blank."""
+    link, target = tmp_path / "link", tmp_path / "auth"
+    _claude_cred(link, access="working", expires=1000)
+    _claude_cred(target, access="", expires=0)               # operator blanked
+    with pytest.raises(ai.CredentialConflict) as exc:
+        ai._link_auth(link, target, "claude")
+    assert "operator" in str(exc.value).lower(), "the summary names the side that is broken"
+    assert "rename" not in exc.value.detail.lower(), (
+        "no rename is in play — a message must not assert a cause that is not the cause")
+    assert "PARENT DIRECTORY" not in exc.value.detail, (
+        "the directory bind cannot help: the parent of a blank file holds a blank file")
+    assert "RE-AUTHENTICATE" in exc.value.detail
+    assert json.loads(link.read_text())["claudeAiOauth"]["accessToken"] == "working"
+    assert "blank or unparseable" in capsys.readouterr().err
+
+    target.write_text("{{{ not json")                        # unparseable, same branch
+    with pytest.raises(ai.CredentialConflict) as exc2:
+        ai._link_auth(link, target, "claude")
+    assert "operator" in str(exc2.value).lower()
+
+
+def test_link_auth_EQUAL_rank_replaces(tmp_path):
+    """The one state live on disk tonight: two byte-identical files, equal expiresAt.
+
+    The comparison is `>` not `>=`, so equal falls through to replace. That is one
+    character with no test on it until now.
+    """
+    link, target = tmp_path / "link", tmp_path / "auth"
+    _claude_cred(link, access="same", expires=5000)
+    _claude_cred(target, access="same", expires=5000)
+    ai._link_auth(link, target, "claude")
+    assert link.is_symlink() and link.resolve() == target, (
+        "equal rank must REPLACE — a hand-copy of the operator's own file is not a conflict")
 
 
 def test_link_auth_unparseable_provider_falls_back_to_mtime(tmp_path):
@@ -184,6 +225,22 @@ def test_warn_if_expiring_fires_inside_the_window_and_not_outside(tmp_path, caps
     assert "hard-expires" in (ai._warn_if_expiring(target, "claude") or "")
     assert "hard-expires" in capsys.readouterr().err
     assert ai._warn_if_expiring(target, "codex") is None, "no parser, no guess"
+
+
+def test_warn_if_expiring_says_it_ONCE_A_DAY_not_once_a_spawn(tmp_path, capsys):
+    """Inside the window the condition is CONTINUOUS; per-spawn lines count duration."""
+    import time
+    target, stamp_dir = tmp_path / "auth", tmp_path / "home"
+    stamp_dir.mkdir()
+    now = time.time() * 1000
+    target.write_text(json.dumps({"claudeAiOauth": {
+        "accessToken": "t", "expiresAt": now, "refreshTokenExpiresAt": now + 2 * 86400 * 1000}}))
+    for _ in range(5):
+        assert ai._warn_if_expiring(target, "claude", stamp_dir=stamp_dir) is not None
+    assert capsys.readouterr().err.count("hard-expires") == 1, "five spawns, one line"
+    (stamp_dir / ".credential-expiry-warned").write_text("1970-01-01")   # a new day
+    ai._warn_if_expiring(target, "claude", stamp_dir=stamp_dir)
+    assert "hard-expires" in capsys.readouterr().err, "a new day is news again"
 
 
 def test_prepare_isolated_home_never_raises_on_missing_auth(tmp_path):

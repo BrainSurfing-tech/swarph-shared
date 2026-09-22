@@ -99,13 +99,21 @@ _GITCONFIG = "[user]\n\tname = swarph drone\n\temail = drone@swarph.local\n[cred
 
 
 class CredentialConflict(RuntimeError):
-    """A REAL FILE at the link path holds a credential NEWER than the operator's.
+    """Linking would destroy a usable credential. Refused, for a human to resolve.
 
-    The only state this module refuses to resolve on its own. Relinking would
-    discard a token the operator's file does not have; copying it out would make
-    this function a credential mover, which is what it exists not to be. Raised
-    with both paths named so a human can decide.
+    ``str(exc)`` IS DELIBERATELY SHORT AND CARRIES NO PATHS. swarph-cli's
+    service/app.py puts ``str(exc)`` of any RuntimeError straight into an HTTP 502
+    body, in the same block that truncates CLI stderr to 200 chars precisely so
+    credentials and environment never leave the box. The paths live on ``.link``
+    and ``.target`` for the caller to LOG; the full sentence goes to stderr here.
+    (science-claude, review of PR #27, finding 3.)
     """
+
+    def __init__(self, summary: str, link: Path, target: Path, detail: str) -> None:
+        super().__init__(summary)
+        self.link = link
+        self.target = target
+        self.detail = detail
 
 
 def _stderr(msg: str) -> None:
@@ -170,14 +178,36 @@ def _link_auth(link: Path, target: Path, provider: str | None = None) -> None:
             link.unlink()          # stale/foreign/dangling → replace
         elif link.exists():
             here_ok, here = _freshness(link, provider)
-            _, there = _freshness(target, provider)
-            if here_ok and here > there:
+            there_ok, there = _freshness(target, provider)
+            # TWO conditions refuse, and they have DIFFERENT causes and different
+            # remedies. Ranking them together made an unusable operator credential
+            # raise "the signature of a CLI that rewrites by rename" -- a diagnosis
+            # of a mechanism not in play, prescribing a directory bind that cannot
+            # help, because the parent of a blank file holds a blank file.
+            # (science-claude, review of PR #27, finding 1.)
+            if here_ok and not there_ok:
+                detail = (
+                    f"the OPERATOR credential at {target} is blank or unparseable, while "
+                    f"{link} holds a usable one. Linking now would replace a working "
+                    f"credential with a broken one. RE-AUTHENTICATE ON THIS BOX; nothing "
+                    f"about the drone home needs changing. This is #923's failure mode on "
+                    f"the operator side: a refresh that could not complete, written back "
+                    f"with empty tokens.")
+                _stderr(detail)
                 raise CredentialConflict(
+                    f"operator {provider or 'provider'} credential is blank or unparseable",
+                    link, target, detail)
+            if here_ok and there_ok and here > there:
+                detail = (
                     f"{link} is a real file holding a credential NEWER than {target} "
                     f"({here} > {there}). Relinking would discard it. This is the "
                     f"signature of a CLI that rewrites its credential by rename: it "
                     f"replaced the symlink, then refreshed. Reconcile by hand, or bind "
                     f"the credential's PARENT DIRECTORY instead of the file.")
+                _stderr(detail)
+                raise CredentialConflict(
+                    f"drone {provider or 'provider'} credential is newer than the operator's",
+                    link, target, detail)
             _stderr(
                 f"{link} was a real file, not a link to {target} "
                 f"({'stale' if here_ok else 'UNUSABLE — blank or unparseable'}); "
@@ -199,11 +229,20 @@ def _link_auth(link: Path, target: Path, provider: str | None = None) -> None:
 EXPIRY_WARN_SECONDS = 3 * 86400
 
 
-def _warn_if_expiring(target: Path, provider: str, now_ms: float | None = None) -> str | None:
+def _warn_if_expiring(target: Path, provider: str, now_ms: float | None = None,
+                      stamp_dir: Path | None = None) -> str | None:
     """Print (and return) a line when the OPERATOR credential is about to die.
 
     Only claude exposes a hard expiry this module can read; the others return
     None rather than a guess.
+
+    ONCE A DAY, NOT ONCE A SPAWN. Inside the window this condition is CONTINUOUS,
+    and at lab-ovh's measured rate (251 spawns in 44h) printing per spawn would
+    emit ~400 identical lines over the final three days: a count that measures how
+    long the condition lasted, not how many times anything happened. A dated stamp
+    in ``stamp_dir`` turns it back into news. Without a stamp_dir it prints every
+    call, which is what the unit tests want.
+    (science-claude, review of PR #27, finding 5.)
     """
     if provider != "claude":
         return None
@@ -222,6 +261,18 @@ def _warn_if_expiring(target: Path, provider: str, now_ms: float | None = None) 
     line = (f"{target}: refresh token hard-expires in ~{max(0, int((exp - now) / 3600000))}h. "
             f"When it does, the next spawn cannot refresh and the CLI writes the "
             f"credential back BLANKED. Re-authenticate before then.")
+    if stamp_dir is not None:
+        stamp = stamp_dir / ".credential-expiry-warned"
+        today = time.strftime("%Y-%m-%d", time.gmtime((now or 0) / 1000))
+        try:
+            if stamp.read_text(encoding="utf-8").strip() == today:
+                return line                      # already said so today
+        except OSError:
+            pass
+        try:
+            stamp.write_text(today, encoding="utf-8")
+        except OSError:
+            pass                                 # a missed stamp only costs a repeat
     _stderr(line)
     return line
 
@@ -233,7 +284,7 @@ def prepare_isolated_home(provider: str, root: Path, *, operator_home: Path | No
         home.mkdir(parents=True, exist_ok=True)
         for rel in PROVIDER_AUTH.get(provider, ()):
             _link_auth(home / rel, Path(op) / rel, provider)
-            _warn_if_expiring(Path(op) / rel, provider)
+            _warn_if_expiring(Path(op) / rel, provider, stamp_dir=home)
         (home / ".gitconfig").write_text(_GITCONFIG, encoding="utf-8")
     except OSError:
         pass                       # best-effort; a partial home is still a valid HOME
