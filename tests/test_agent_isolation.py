@@ -297,3 +297,17 @@ def test_warn_if_expiring_a_FUTURE_stamp_does_not_silence_it(tmp_path, capsys):
     for junk in ("", "   ", "not-a-number"):                 # the cases that already failed open
         stamp.write_text(junk)
         assert ai._warn_if_expiring(target, "claude", now_ms=now, stamp_dir=stamp_dir) is not None
+
+
+def test_remaining_validity_is_logged_at_every_spawn(tmp_path, capsys):
+    """The deferral rate is a per-runner, at-spawn quantity — not a fixed-window sampler's."""
+    target = tmp_path / "auth"
+    now = 1790035200000.0
+    target.write_text(json.dumps({"claudeAiOauth": {
+        "accessToken": "t", "expiresAt": now + 90 * 60000, "refreshTokenExpiresAt": now + 9 * 10 ** 8}}))
+    assert "90 min of validity left" in (ai._log_remaining_validity(target, "claude", now_ms=now) or "")
+    assert "90 min" in capsys.readouterr().err
+    # every spawn, not once a day: this one carries no stamp and must repeat
+    ai._log_remaining_validity(target, "claude", now_ms=now)
+    assert "90 min" in capsys.readouterr().err, "the at-spawn reading must NOT be deduplicated"
+    assert ai._log_remaining_validity(target, "codex", now_ms=now) is None, "no parser, no guess"

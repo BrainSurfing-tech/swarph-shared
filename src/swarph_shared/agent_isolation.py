@@ -302,6 +302,36 @@ def _warn_if_expiring(target: Path, provider: str, now_ms: float | None = None,
     _stderr(line)
     return line
 
+def _log_remaining_validity(target: Path, provider: str, now_ms: float | None = None) -> str | None:
+    """One line per spawn: how much life the ACCESS token has left, at spawn time.
+
+    This is the quantity a seed gate has to read anyway to decide whether a drone
+    can complete its run without refreshing, so measuring it here costs nothing and
+    needs no second instrument. It is deliberately NOT the hard-expiry warning above:
+    that one is about the refresh token dying (card #923's root cause), this one is
+    about whether THIS run will have to refresh.
+
+    Recorded at EVERY spawn rather than on a timer, because the rate wanted is
+    per-runner at each runner's own hour -- eod-highlights at 21:00Z, weekly-newsletter
+    at its own -- and a sampler on a fixed window measures neither.
+    (science-claude, PR #27: a probe built for one question cannot be handed a second.)
+    """
+    if provider != "claude":
+        return None
+    try:
+        obj = json.loads(target.read_text(encoding="utf-8")).get("claudeAiOauth")
+    except (OSError, ValueError, AttributeError):
+        return None
+    if not isinstance(obj, dict):
+        return None
+    exp = obj.get("expiresAt")
+    if not isinstance(exp, (int, float)):
+        return None
+    now = time.time() * 1000 if now_ms is None else now_ms
+    line = f"{target}: access token has {int((exp - now) / 60000)} min of validity left at spawn"
+    _stderr(line)
+    return line
+
 def prepare_isolated_home(provider: str, root: Path, *, operator_home: Path | None = None) -> Path:
     """Create root/.{provider}-drone-home carrying ONLY this provider's auth."""
     op = operator_home if operator_home is not None else Path.home()
@@ -311,6 +341,7 @@ def prepare_isolated_home(provider: str, root: Path, *, operator_home: Path | No
         for rel in PROVIDER_AUTH.get(provider, ()):
             _link_auth(home / rel, Path(op) / rel, provider)
             _warn_if_expiring(Path(op) / rel, provider, stamp_dir=home)
+            _log_remaining_validity(Path(op) / rel, provider)
         (home / ".gitconfig").write_text(_GITCONFIG, encoding="utf-8")
     except OSError:
         pass                       # best-effort; a partial home is still a valid HOME
