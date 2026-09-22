@@ -208,10 +208,21 @@ def _link_auth(link: Path, target: Path, provider: str | None = None) -> None:
                 raise CredentialConflict(
                     f"drone {provider or 'provider'} credential is newer than the operator's",
                     link, target, detail)
+            # Linking is still the right action here, but when the OPERATOR side
+            # is also broken it must not read as a repair: at that moment there is
+            # no usable credential anywhere on the box, and the next spawn fails
+            # with an auth error pointing at neither file. Finding 1 split the
+            # operator-broken case out of the REFUSAL and left its sibling
+            # collapsed into the success path. (science-claude, PR #27, new A.)
             _stderr(
                 f"{link} was a real file, not a link to {target} "
                 f"({'stale' if here_ok else 'UNUSABLE — blank or unparseable'}); "
-                f"replacing it with the intended symlink")
+                f"replacing it with the intended symlink"
+                + ("" if there_ok else
+                   f" — AND THE OPERATOR CREDENTIAL AT {target} IS ALSO blank or "
+                   f"unparseable, so NO USABLE {(provider or 'provider').upper()} "
+                   f"CREDENTIAL EXISTS ON THIS BOX. The link is correct; the spawn "
+                   f"will still fail. RE-AUTHENTICATE."))
             link.unlink()
         link.parent.mkdir(parents=True, exist_ok=True)
         link.symlink_to(target)
@@ -263,14 +274,20 @@ def _warn_if_expiring(target: Path, provider: str, now_ms: float | None = None,
             f"credential back BLANKED. Re-authenticate before then.")
     if stamp_dir is not None:
         stamp = stamp_dir / ".credential-expiry-warned"
-        today = time.strftime("%Y-%m-%d", time.gmtime((now or 0) / 1000))
         try:
-            if stamp.read_text(encoding="utf-8").strip() == today:
-                return line                      # already said so today
-        except OSError:
-            pass
+            if now - float(stamp.read_text(encoding="utf-8").strip()) < 86400000:
+                # None, NOT the line: a caller writing `if _warn_if_expiring(...):
+                # notify()` would otherwise notify every spawn -- the per-spawn
+                # repetition this stamp removes, reintroduced in the return
+                # contract. (science-claude, PR #27, new B.)
+                return None
+        except (OSError, ValueError):
+            pass                                 # no stamp, or unreadable -> speak
         try:
-            stamp.write_text(today, encoding="utf-8")
+            # ELAPSED ms, not a calendar date: "%Y-%m-%d" printed twice in three
+            # minutes across UTC midnight, which is not "once a day".
+            # (science-claude, PR #27, new C.)
+            stamp.write_text(str(now), encoding="utf-8")
         except OSError:
             pass                                 # a missed stamp only costs a repeat
     _stderr(line)

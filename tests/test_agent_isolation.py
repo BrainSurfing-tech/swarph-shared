@@ -235,12 +235,43 @@ def test_warn_if_expiring_says_it_ONCE_A_DAY_not_once_a_spawn(tmp_path, capsys):
     now = time.time() * 1000
     target.write_text(json.dumps({"claudeAiOauth": {
         "accessToken": "t", "expiresAt": now, "refreshTokenExpiresAt": now + 2 * 86400 * 1000}}))
-    for _ in range(5):
-        assert ai._warn_if_expiring(target, "claude", stamp_dir=stamp_dir) is not None
+    assert ai._warn_if_expiring(target, "claude", stamp_dir=stamp_dir) is not None
+    for _ in range(4):
+        assert ai._warn_if_expiring(target, "claude", stamp_dir=stamp_dir) is None, (
+            "the return value must distinguish SPOKE from SUPPRESSED — a caller doing "
+            "`if warn(): notify()` would otherwise notify on every spawn")
     assert capsys.readouterr().err.count("hard-expires") == 1, "five spawns, one line"
-    (stamp_dir / ".credential-expiry-warned").write_text("1970-01-01")   # a new day
-    ai._warn_if_expiring(target, "claude", stamp_dir=stamp_dir)
-    assert "hard-expires" in capsys.readouterr().err, "a new day is news again"
+    (stamp_dir / ".credential-expiry-warned").write_text(str(now - 86400001))   # 24h+ ago
+    assert ai._warn_if_expiring(target, "claude", stamp_dir=stamp_dir) is not None
+    assert "hard-expires" in capsys.readouterr().err, "a full day later is news again"
+
+
+def test_warn_if_expiring_measures_ELAPSED_time_not_the_calendar(tmp_path, capsys):
+    """"%Y-%m-%d" printed twice in three minutes across UTC midnight."""
+    import time
+    target, stamp_dir = tmp_path / "auth", tmp_path / "home"
+    stamp_dir.mkdir()
+    midnight = 1790035200000.0                       # 2026-09-22T00:00:00Z
+    doc = lambda now: json.dumps({"claudeAiOauth": {
+        "accessToken": "t", "expiresAt": now, "refreshTokenExpiresAt": now + 2 * 86400 * 1000}})
+    target.write_text(doc(midnight))
+    assert ai._warn_if_expiring(target, "claude", now_ms=midnight - 120000, stamp_dir=stamp_dir)
+    assert ai._warn_if_expiring(target, "claude", now_ms=midnight + 60000, stamp_dir=stamp_dir) is None, (
+        "crossing midnight is not 24 hours elapsed")
+    assert capsys.readouterr().err.count("hard-expires") == 1
+
+
+def test_link_auth_says_so_when_BOTH_sides_are_broken(tmp_path, capsys):
+    """The link is right and the spawn still fails — that must not read as a repair."""
+    link, target = tmp_path / "link", tmp_path / "auth"
+    _claude_cred(link, access="", expires=0)
+    _claude_cred(target, access="", expires=0)
+    ai._link_auth(link, target, "claude")
+    err = capsys.readouterr().err
+    assert link.is_symlink(), "linking is still the correct action"
+    assert "ALSO blank or unparseable" in err, "the operator side must be named too"
+    assert "RE-AUTHENTICATE" in err
+    assert "NO USABLE CLAUDE CREDENTIAL EXISTS ON THIS BOX" in err
 
 
 def test_prepare_isolated_home_never_raises_on_missing_auth(tmp_path):
