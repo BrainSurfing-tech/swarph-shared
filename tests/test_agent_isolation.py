@@ -311,3 +311,28 @@ def test_remaining_validity_is_logged_at_every_spawn(tmp_path, capsys):
     ai._log_remaining_validity(target, "claude", now_ms=now)
     assert "90 min" in capsys.readouterr().err, "the at-spawn reading must NOT be deduplicated"
     assert ai._log_remaining_validity(target, "codex", now_ms=now) is None, "no parser, no guess"
+
+
+def test_prepare_isolated_home_NEVER_raises_on_a_credential_conflict(tmp_path, capsys):
+    """THREE live callers, one a uvicorn on 0.0.0.0:8789 — a refusal must not 500 a service.
+
+    The contract is "best-effort; a partial home is still a valid HOME". _link_auth still
+    raises for direct callers; prepare_isolated_home converts it to a loud stderr line and
+    a home with no credential, so the spawn fails at AUTH with a reason instead of a stack
+    trace in a request handler. (science-claude: the caller count was a FLOOR of 2; the
+    whole-home sweep returned 3.)
+    """
+    op, root = tmp_path / "op", tmp_path / "drones"
+    _claude_cred(op / ".claude" / ".credentials.json", access="older", expires=1000)
+    link = root / ".claude-drone-home" / ".claude" / ".credentials.json"
+    _claude_cred(link, access="newer-in-the-drone", expires=9000)
+
+    home = ai.prepare_isolated_home("claude", root, operator_home=op)     # must NOT raise
+
+    assert home.exists(), "a partial home is still a valid HOME"
+    err = capsys.readouterr().err
+    assert "REFUSED" in err and "left untouched" in err
+    assert not link.is_symlink(), "the refusal holds — the newer credential is not clobbered"
+    assert json.loads(link.read_text())["claudeAiOauth"]["accessToken"] == "newer-in-the-drone"
+    with pytest.raises(ai.CredentialConflict):
+        ai._link_auth(link, op / ".claude" / ".credentials.json", "claude")   # direct call still raises

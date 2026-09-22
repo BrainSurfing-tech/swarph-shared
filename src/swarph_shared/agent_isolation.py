@@ -339,7 +339,23 @@ def prepare_isolated_home(provider: str, root: Path, *, operator_home: Path | No
     try:
         home.mkdir(parents=True, exist_ok=True)
         for rel in PROVIDER_AUTH.get(provider, ()):
-            _link_auth(home / rel, Path(op) / rel, provider)
+            try:
+                _link_auth(home / rel, Path(op) / rel, provider)
+            except CredentialConflict as exc:
+                # THE REFUSAL MUST NOT CRASH A CALLER. This function's contract is
+                # best-effort — "a partial home is still a valid HOME" — and there
+                # are THREE live callers, one of them a uvicorn service bound to
+                # 0.0.0.0:8789 (gpt-service/server.py:125). A CredentialConflict is
+                # a RuntimeError; unhandled it would turn a credential edge case
+                # into a 500 on a public bind.
+                #
+                # So the refusal HOLDS — the newer credential is still not
+                # clobbered and no link is made — and the spawn proceeds to fail at
+                # AUTH with the reason on stderr, which is a diagnosable failure
+                # rather than a stack trace in a request handler. `_link_auth`
+                # still raises for direct callers, where the exception is the point.
+                _stderr(f"REFUSED {exc} — {exc.link} left untouched, spawn will have no "
+                        f"{provider} auth. {exc.detail}")
             _warn_if_expiring(Path(op) / rel, provider, stamp_dir=home)
             _log_remaining_validity(Path(op) / rel, provider)
         (home / ".gitconfig").write_text(_GITCONFIG, encoding="utf-8")
