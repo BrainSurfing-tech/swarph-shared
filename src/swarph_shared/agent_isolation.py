@@ -10,6 +10,9 @@ See swarph-cli/docs/superpowers/specs/2026-07-13-swairm-pattern-port-design.md.
 """
 from __future__ import annotations
 
+import json
+import sys
+import time
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -95,22 +98,239 @@ def build_isolated_env(source: Mapping[str, str], home: Path, provider: str) -> 
 _GITCONFIG = "[user]\n\tname = swarph drone\n\temail = drone@swarph.local\n[credential]\n\thelper =\n"
 
 
-def _link_auth(link: Path, target: Path) -> None:
-    """Idempotent best-effort symlink ``link`` -> ``target`` (mirrors _link_grok_auth)."""
+class CredentialConflict(RuntimeError):
+    """Linking would destroy a usable credential. Refused, for a human to resolve.
+
+    ``str(exc)`` IS DELIBERATELY SHORT AND CARRIES NO PATHS. swarph-cli's
+    service/app.py puts ``str(exc)`` of any RuntimeError straight into an HTTP 502
+    body, in the same block that truncates CLI stderr to 200 chars precisely so
+    credentials and environment never leave the box. The paths live on ``.link``
+    and ``.target`` for the caller to LOG; the full sentence goes to stderr here.
+    (science-claude, review of PR #27, finding 3.)
+    """
+
+    def __init__(self, summary: str, link: Path, target: Path, detail: str) -> None:
+        super().__init__(summary)
+        self.link = link
+        self.target = target
+        self.detail = detail
+
+
+def _stderr(msg: str) -> None:
+    """Every previously-silent branch of this module ends here.
+
+    #923: a drone credential sat blanked for 44h across 251 spawns and NOTHING
+    printed. A seam that is allowed to do nothing must still be allowed to say so.
+    """
+    sys.stderr.write(f"swarph_shared.agent_isolation: {msg}\n")
+
+
+def _freshness(path: Path, provider: str | None) -> tuple[bool, float]:
+    """-> (usable, rank). Rank is comparable only BETWEEN FILES OF ONE PROVIDER.
+
+    For claude the rank is the OAuth ``expiresAt``, which is what the two files
+    actually disagree about; for every other provider it is mtime, because this
+    module has no parser for their formats and mtime is the honest floor.
+    """
+    if provider == "claude":
+        try:
+            obj = json.loads(path.read_text(encoding="utf-8")).get("claudeAiOauth")
+        except (OSError, ValueError, AttributeError):
+            return (False, -1.0)
+        if not isinstance(obj, dict):
+            return (False, -1.0)
+        exp = obj.get("expiresAt")
+        return (bool((obj.get("accessToken") or "").strip()),
+                float(exp) if isinstance(exp, (int, float)) else -1.0)
+    try:
+        st = path.stat()
+    except OSError:
+        return (False, -1.0)
+    return (st.st_size > 0, float(st.st_mtime))
+
+
+def _link_auth(link: Path, target: Path, provider: str | None = None) -> None:
+    """Idempotent best-effort symlink ``link`` -> ``target`` (mirrors _link_grok_auth).
+
+    ONE INODE, TWO PATHS is the whole design: a refresh on either side is
+    instantly visible to the other, so there is no window in which the drone and
+    the operator hold different tokens and no copy to keep in step.
+
+    #923 replaced the old ``elif link.exists(): return  # never clobber a real
+    file`` guard. That guard was defending against a case that cannot arise --
+    inside a drone home THIS function creates and owns, the only writer of a
+    PROVIDER_AUTH path is this function -- and it cost 44h of silent failure: a
+    regular file appeared at the claude link path holding a credential whose
+    refresh token had hard-expired, and every subsequent spawn hit the guard and
+    left it there. A regular file at this path is now REPLACED when doing so
+    loses nothing, and raises ``CredentialConflict`` when it would.
+    """
     if not target.exists():
+        # macOS keeps some CLI credentials in the Keychain, not on disk; a
+        # provider may simply not be logged in. Both are legitimate and neither
+        # should be silent -- the drone gets a HOME with no auth either way.
+        _stderr(f"{target} does not exist — the spawn will have no {provider or 'provider'} auth")
         return
     try:
         if link.is_symlink():
             if link.readlink() == target:
-                return
+                return             # already the intended binding
             link.unlink()          # stale/foreign/dangling → replace
         elif link.exists():
-            return                 # never clobber a real file
+            here_ok, here = _freshness(link, provider)
+            there_ok, there = _freshness(target, provider)
+            # TWO conditions refuse, and they have DIFFERENT causes and different
+            # remedies. Ranking them together made an unusable operator credential
+            # raise "the signature of a CLI that rewrites by rename" -- a diagnosis
+            # of a mechanism not in play, prescribing a directory bind that cannot
+            # help, because the parent of a blank file holds a blank file.
+            # (science-claude, review of PR #27, finding 1.)
+            if here_ok and not there_ok:
+                detail = (
+                    f"the OPERATOR credential at {target} is blank or unparseable, while "
+                    f"{link} holds a usable one. Linking now would replace a working "
+                    f"credential with a broken one. RE-AUTHENTICATE ON THIS BOX; nothing "
+                    f"about the drone home needs changing. This is #923's failure mode on "
+                    f"the operator side: a refresh that could not complete, written back "
+                    f"with empty tokens.")
+                _stderr(detail)
+                raise CredentialConflict(
+                    f"operator {provider or 'provider'} credential is blank or unparseable",
+                    link, target, detail)
+            if here_ok and there_ok and here > there:
+                detail = (
+                    f"{link} is a real file holding a credential NEWER than {target} "
+                    f"({here} > {there}). Relinking would discard it. This is the "
+                    f"signature of a CLI that rewrites its credential by rename: it "
+                    f"replaced the symlink, then refreshed. Reconcile by hand, or bind "
+                    f"the credential's PARENT DIRECTORY instead of the file.")
+                _stderr(detail)
+                raise CredentialConflict(
+                    f"drone {provider or 'provider'} credential is newer than the operator's",
+                    link, target, detail)
+            # Linking is still the right action here, but when the OPERATOR side
+            # is also broken it must not read as a repair: at that moment there is
+            # no usable credential anywhere on the box, and the next spawn fails
+            # with an auth error pointing at neither file. Finding 1 split the
+            # operator-broken case out of the REFUSAL and left its sibling
+            # collapsed into the success path. (science-claude, PR #27, new A.)
+            _stderr(
+                f"{link} was a real file, not a link to {target} "
+                f"({'stale' if here_ok else 'UNUSABLE — blank or unparseable'}); "
+                f"replacing it with the intended symlink"
+                + ("" if there_ok else
+                   f" — AND THE OPERATOR CREDENTIAL AT {target} IS ALSO blank or "
+                   f"unparseable, so NO USABLE {(provider or 'provider').upper()} "
+                   f"CREDENTIAL EXISTS ON THIS BOX. The link is correct; the spawn "
+                   f"will still fail. RE-AUTHENTICATE."))
+            link.unlink()
         link.parent.mkdir(parents=True, exist_ok=True)
         link.symlink_to(target)
-    except OSError:
-        return                     # never crash a spawn
+    except OSError as exc:
+        # Windows refuses symlinks without Developer Mode or SeCreateSymbolicLink.
+        # The spawn continues with no auth rather than dying, but it says so:
+        # THIS FILE-LINKING DESIGN DOES NOT GENERALISE OFF POSIX.
+        _stderr(f"could not link {link} -> {target}: {exc}")
+        return
 
+
+#: How long before a refresh token's HARD expiry to start saying so. #923: the
+#: drone's own login hard-expired with no warning at all and the next spawn
+#: turned that into a blanked credential.
+EXPIRY_WARN_SECONDS = 3 * 86400
+
+
+def _warn_if_expiring(target: Path, provider: str, now_ms: float | None = None,
+                      stamp_dir: Path | None = None) -> str | None:
+    """Print (and return) a line when the OPERATOR credential is about to die.
+
+    Only claude exposes a hard expiry this module can read; the others return
+    None rather than a guess.
+
+    ONCE A DAY, NOT ONCE A SPAWN. Inside the window this condition is CONTINUOUS,
+    and at lab-ovh's measured rate (251 spawns in 44h) printing per spawn would
+    emit ~400 identical lines over the final three days: a count that measures how
+    long the condition lasted, not how many times anything happened. A dated stamp
+    in ``stamp_dir`` turns it back into news. Without a stamp_dir it prints every
+    call, which is what the unit tests want.
+    (science-claude, review of PR #27, finding 5.)
+    """
+    if provider != "claude":
+        return None
+    try:
+        obj = json.loads(target.read_text(encoding="utf-8")).get("claudeAiOauth")
+    except (OSError, ValueError, AttributeError):
+        return None
+    if not isinstance(obj, dict):
+        return None
+    exp = obj.get("refreshTokenExpiresAt")
+    if not isinstance(exp, (int, float)):
+        return None
+    now = time.time() * 1000 if now_ms is None else now_ms
+    if exp - now >= EXPIRY_WARN_SECONDS * 1000:
+        return None
+    line = (f"{target}: refresh token hard-expires in ~{max(0, int((exp - now) / 3600000))}h. "
+            f"When it does, the next spawn cannot refresh and the CLI writes the "
+            f"credential back BLANKED. Re-authenticate before then.")
+    if stamp_dir is not None:
+        stamp = stamp_dir / ".credential-expiry-warned"
+        try:
+            # BOUNDED ON BOTH SIDES. A one-sided `< 86400000` is also satisfied by a
+            # NEGATIVE elapsed, so a stamp dated ahead of the clock reads as "warned a
+            # moment ago" and keeps reading that way until the clock catches up --
+            # suppressing, silently and indefinitely, the one warning whose purpose is
+            # to fire before a credential dies unattended. Reachable by an NTP step
+            # backwards, a restored home, or a VM resumed from a snapshot. Every other
+            # failure of this file (absent, empty, whitespace, non-numeric) already
+            # fails OPEN and speaks; this is the only one that failed closed.
+            # (science-claude, PR #27, final finding.)
+            if 0 <= now - float(stamp.read_text(encoding="utf-8").strip()) < 86400000:
+                # None, NOT the line: a caller writing `if _warn_if_expiring(...):
+                # notify()` would otherwise notify every spawn -- the per-spawn
+                # repetition this stamp removes, reintroduced in the return
+                # contract. (science-claude, PR #27, new B.)
+                return None
+        except (OSError, ValueError):
+            pass                                 # no stamp, or unreadable -> speak
+        try:
+            # ELAPSED ms, not a calendar date: "%Y-%m-%d" printed twice in three
+            # minutes across UTC midnight, which is not "once a day".
+            # (science-claude, PR #27, new C.)
+            stamp.write_text(str(now), encoding="utf-8")
+        except OSError:
+            pass                                 # a missed stamp only costs a repeat
+    _stderr(line)
+    return line
+
+def _log_remaining_validity(target: Path, provider: str, now_ms: float | None = None) -> str | None:
+    """One line per spawn: how much life the ACCESS token has left, at spawn time.
+
+    This is the quantity a seed gate has to read anyway to decide whether a drone
+    can complete its run without refreshing, so measuring it here costs nothing and
+    needs no second instrument. It is deliberately NOT the hard-expiry warning above:
+    that one is about the refresh token dying (card #923's root cause), this one is
+    about whether THIS run will have to refresh.
+
+    Recorded at EVERY spawn rather than on a timer, because the rate wanted is
+    per-runner at each runner's own hour -- eod-highlights at 21:00Z, weekly-newsletter
+    at its own -- and a sampler on a fixed window measures neither.
+    (science-claude, PR #27: a probe built for one question cannot be handed a second.)
+    """
+    if provider != "claude":
+        return None
+    try:
+        obj = json.loads(target.read_text(encoding="utf-8")).get("claudeAiOauth")
+    except (OSError, ValueError, AttributeError):
+        return None
+    if not isinstance(obj, dict):
+        return None
+    exp = obj.get("expiresAt")
+    if not isinstance(exp, (int, float)):
+        return None
+    now = time.time() * 1000 if now_ms is None else now_ms
+    line = f"{target}: access token has {int((exp - now) / 60000)} min of validity left at spawn"
+    _stderr(line)
+    return line
 
 def prepare_isolated_home(provider: str, root: Path, *, operator_home: Path | None = None) -> Path:
     """Create root/.{provider}-drone-home carrying ONLY this provider's auth."""
@@ -119,7 +339,25 @@ def prepare_isolated_home(provider: str, root: Path, *, operator_home: Path | No
     try:
         home.mkdir(parents=True, exist_ok=True)
         for rel in PROVIDER_AUTH.get(provider, ()):
-            _link_auth(home / rel, Path(op) / rel)
+            try:
+                _link_auth(home / rel, Path(op) / rel, provider)
+            except CredentialConflict as exc:
+                # THE REFUSAL MUST NOT CRASH A CALLER. This function's contract is
+                # best-effort — "a partial home is still a valid HOME" — and there
+                # are THREE live callers, one of them a uvicorn service bound to
+                # 0.0.0.0:8789 (gpt-service/server.py:125). A CredentialConflict is
+                # a RuntimeError; unhandled it would turn a credential edge case
+                # into a 500 on a public bind.
+                #
+                # So the refusal HOLDS — the newer credential is still not
+                # clobbered and no link is made — and the spawn proceeds to fail at
+                # AUTH with the reason on stderr, which is a diagnosable failure
+                # rather than a stack trace in a request handler. `_link_auth`
+                # still raises for direct callers, where the exception is the point.
+                _stderr(f"REFUSED {exc} — {exc.link} left untouched, spawn will have no "
+                        f"{provider} auth. {exc.detail}")
+            _warn_if_expiring(Path(op) / rel, provider, stamp_dir=home)
+            _log_remaining_validity(Path(op) / rel, provider)
         (home / ".gitconfig").write_text(_GITCONFIG, encoding="utf-8")
     except OSError:
         pass                       # best-effort; a partial home is still a valid HOME

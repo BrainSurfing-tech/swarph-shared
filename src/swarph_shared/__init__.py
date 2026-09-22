@@ -81,6 +81,7 @@ from swarph_shared.cell import (
 )
 from swarph_shared.agent_isolation import (
     PROVIDER_AUTH,
+    CredentialConflict,
     build_isolated_env,
     prepare_isolated_home,
 )
@@ -104,7 +105,7 @@ from swarph_shared.llm_cost import (
     usage_from_claude_p_json,
 )
 
-__version__ = "0.8.1"
+__version__ = "0.9.0"
 
 __all__ = [
     "__version__",
@@ -117,6 +118,7 @@ __all__ = [
     "verify_subscription_setup",
     # agent_isolation
     "PROVIDER_AUTH",
+    "CredentialConflict",
     "build_isolated_env",
     "prepare_isolated_home",
     # json_mode
