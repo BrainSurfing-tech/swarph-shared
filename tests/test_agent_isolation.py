@@ -1,4 +1,7 @@
+import json
 from pathlib import Path
+
+import pytest
 
 from swarph_shared import agent_isolation as ai
 
@@ -102,11 +105,85 @@ def test_link_auth_idempotent_and_replaces_stale(tmp_path):
     assert link.resolve() == target
 
 
-def test_link_auth_never_clobbers_real_file(tmp_path):
-    real = tmp_path / "link"; real.write_text("do not delete")
-    target = tmp_path / "auth"; target.write_text("auth")
-    ai._link_auth(real, target)
-    assert real.read_text() == "do not delete"
+# --- #923: a real file at the link path. The four cases, and the one refusal. ---
+#
+# REPLACES test_link_auth_never_clobbers_real_file, which asserted the defect.
+# "Never clobber a real file" left a BLANKED claude credential in place for 44h
+# across 251 spawns: the guard fired on every one of them. Inside a drone home
+# this module creates and owns, the only writer of a PROVIDER_AUTH path is this
+# module, so the file it was protecting cannot legitimately exist.
+
+def _claude_cred(path, access="tok", expires=1000):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"claudeAiOauth": {
+        "accessToken": access, "refreshToken": "r", "expiresAt": expires,
+        "refreshTokenExpiresAt": expires + 9 * 10 ** 8}}))
+
+
+def test_link_auth_replaces_a_BLANKED_real_file(tmp_path):
+    """The #923 state exactly: tokens emptied by a failed refresh, then pinned."""
+    link, target = tmp_path / "link", tmp_path / "auth"
+    _claude_cred(link, access="", expires=0)          # what the CLI wrote back
+    _claude_cred(target, access="live", expires=9000)
+    ai._link_auth(link, target, "claude")
+    assert link.is_symlink() and link.resolve() == target
+
+
+def test_link_auth_replaces_a_STALE_but_usable_real_file(tmp_path):
+    """Tonight's disk state: a hand-copy, older than or equal to the operator's."""
+    link, target = tmp_path / "link", tmp_path / "auth"
+    _claude_cred(link, access="copy", expires=1000)
+    _claude_cred(target, access="live", expires=9000)
+    ai._link_auth(link, target, "claude")
+    assert link.is_symlink() and link.resolve() == target
+
+
+def test_link_auth_REFUSES_when_the_real_file_is_NEWER(tmp_path):
+    """The only lossy case — and the signature of a rename-based CLI."""
+    link, target = tmp_path / "link", tmp_path / "auth"
+    _claude_cred(link, access="refreshed-in-the-drone", expires=9000)
+    _claude_cred(target, access="older", expires=1000)
+    with pytest.raises(ai.CredentialConflict) as exc:
+        ai._link_auth(link, target, "claude")
+    assert str(link) in str(exc.value) and str(target) in str(exc.value), "both paths named"
+    assert not link.is_symlink(), "the newer credential is left exactly where it is"
+    assert json.loads(link.read_text())["claudeAiOauth"]["accessToken"] == "refreshed-in-the-drone"
+
+
+def test_link_auth_unparseable_provider_falls_back_to_mtime(tmp_path):
+    """codex/gemini/grok have no parser here; mtime is the honest floor."""
+    import os
+    link, target = tmp_path / "link", tmp_path / "auth"
+    target.write_text("newer"); link.write_text("older")
+    os.utime(link, (1, 1))                            # link clearly older
+    ai._link_auth(link, target, "codex")
+    assert link.is_symlink() and link.resolve() == target
+
+    link2 = tmp_path / "link2"; link2.write_text("newer than target")
+    os.utime(target, (1, 1))
+    with pytest.raises(ai.CredentialConflict):
+        ai._link_auth(link2, target, "codex")
+
+
+def test_link_auth_says_so_when_the_target_is_absent(tmp_path, capsys):
+    """macOS Keychain / not-logged-in. Legitimate, but never silent."""
+    ai._link_auth(tmp_path / "link", tmp_path / "nothing-here", "claude")
+    assert "does not exist" in capsys.readouterr().err
+
+
+def test_warn_if_expiring_fires_inside_the_window_and_not_outside(tmp_path, capsys):
+    """#923's root cause was a hard expiry nobody was watching."""
+    import time
+    target = tmp_path / "auth"
+    now = time.time() * 1000
+    _claude_cred(target, expires=int(now))
+    # refreshTokenExpiresAt is expires + 9e8 ms (~10.4 days) -> outside the window
+    assert ai._warn_if_expiring(target, "claude") is None
+    target.write_text(json.dumps({"claudeAiOauth": {
+        "accessToken": "t", "expiresAt": now, "refreshTokenExpiresAt": now + 2 * 86400 * 1000}}))
+    assert "hard-expires" in (ai._warn_if_expiring(target, "claude") or "")
+    assert "hard-expires" in capsys.readouterr().err
+    assert ai._warn_if_expiring(target, "codex") is None, "no parser, no guess"
 
 
 def test_prepare_isolated_home_never_raises_on_missing_auth(tmp_path):
