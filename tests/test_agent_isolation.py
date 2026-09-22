@@ -278,3 +278,22 @@ def test_prepare_isolated_home_never_raises_on_missing_auth(tmp_path):
     op = tmp_path / "operator"; op.mkdir()
     home = ai.prepare_isolated_home("claude", tmp_path / "s", operator_home=op)
     assert home.exists(), "missing operator auth is non-fatal — spawn still gets a HOME"
+
+
+def test_warn_if_expiring_a_FUTURE_stamp_does_not_silence_it(tmp_path, capsys):
+    """A clock that moved backwards must fail OPEN, like every other stamp failure."""
+    target, stamp_dir = tmp_path / "auth", tmp_path / "home"
+    stamp_dir.mkdir()
+    now = 1790035200000.0
+    target.write_text(json.dumps({"claudeAiOauth": {
+        "accessToken": "t", "expiresAt": now, "refreshTokenExpiresAt": now + 2 * 86400 * 1000}}))
+    stamp = stamp_dir / ".credential-expiry-warned"
+
+    stamp.write_text(str(now + 5 * 365 * 86400000))          # NTP step back / restored home
+    assert ai._warn_if_expiring(target, "claude", now_ms=now, stamp_dir=stamp_dir) is not None, (
+        "a stamp from the future must not suppress the warning — it fails CLOSED and silently")
+    assert "hard-expires" in capsys.readouterr().err
+
+    for junk in ("", "   ", "not-a-number"):                 # the cases that already failed open
+        stamp.write_text(junk)
+        assert ai._warn_if_expiring(target, "claude", now_ms=now, stamp_dir=stamp_dir) is not None

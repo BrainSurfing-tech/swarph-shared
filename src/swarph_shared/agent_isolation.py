@@ -275,7 +275,16 @@ def _warn_if_expiring(target: Path, provider: str, now_ms: float | None = None,
     if stamp_dir is not None:
         stamp = stamp_dir / ".credential-expiry-warned"
         try:
-            if now - float(stamp.read_text(encoding="utf-8").strip()) < 86400000:
+            # BOUNDED ON BOTH SIDES. A one-sided `< 86400000` is also satisfied by a
+            # NEGATIVE elapsed, so a stamp dated ahead of the clock reads as "warned a
+            # moment ago" and keeps reading that way until the clock catches up --
+            # suppressing, silently and indefinitely, the one warning whose purpose is
+            # to fire before a credential dies unattended. Reachable by an NTP step
+            # backwards, a restored home, or a VM resumed from a snapshot. Every other
+            # failure of this file (absent, empty, whitespace, non-numeric) already
+            # fails OPEN and speaks; this is the only one that failed closed.
+            # (science-claude, PR #27, final finding.)
+            if 0 <= now - float(stamp.read_text(encoding="utf-8").strip()) < 86400000:
                 # None, NOT the line: a caller writing `if _warn_if_expiring(...):
                 # notify()` would otherwise notify every spawn -- the per-spawn
                 # repetition this stamp removes, reintroduced in the return
